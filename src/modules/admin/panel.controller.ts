@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { Controller, Get, Res } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { SkipEnvelope } from '../../common/decorators/skip-envelope.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { panelHtml } from './panel.page';
 
@@ -48,6 +49,10 @@ function cspDelPanel(nonce: string): string {
  */
 @ApiExcludeController()
 @Public()
+// Sin esto el interceptor global devuelve {"data":"<!doctype html>..."} con
+// todo el marcado escapado: el navegador pinta el texto pero descarta el
+// <style> y el <script> porque sus nonce ya no coinciden con la cabecera CSP.
+@SkipEnvelope()
 @Controller('admin')
 export class PanelController {
   @Get()

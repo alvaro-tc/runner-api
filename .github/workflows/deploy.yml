@@ -109,6 +109,18 @@ jobs:
               exit 1
             fi
 
+            # sudo se comprueba ANTES de npm ci: si el usuario no tiene
+            # NOPASSWD, el fallo salta en 2s y no tras 3 min de instalacion.
+            # `-n` en todos los sudo del script: sin TTY, un sudo normal
+            # intenta abrir un prompt y muere con un error opaco.
+            if ! sudo -n true 2>/dev/null; then
+              echo "▸ El usuario $(whoami) no puede ejecutar sudo sin contrasena."
+              echo "▸ Anade en el VPS /etc/sudoers.d/running-api-deploy (chmod 440):"
+              echo "▸   $(whoami) ALL=(root) NOPASSWD: /bin/systemctl restart running-api, /usr/bin/journalctl -u running-api *"
+              echo "▸ Ajusta las rutas a lo que devuelva 'which systemctl journalctl'."
+              exit 1
+            fi
+
             # dist/ se borra entero: un fichero .js huerfano de un rename viejo
             # se seguiria cargando y depurarlo es una tarde perdida.
             rm -rf dist
@@ -131,7 +143,7 @@ jobs:
             # y valores legitimos como `INVOICE_LEGAL_NAME=PaceUp SRL` (sin
             # comillas) reventarian el script. `sudo cat` porque el fichero es
             # 600 y de otro usuario; no se copia a disco en ningun momento.
-            if [ -r "$ENV_FILE" ]; then LEER="cat"; else LEER="sudo cat"; fi
+            if [ -r "$ENV_FILE" ]; then LEER="cat"; else LEER="sudo -n cat"; fi
             DATABASE_URL=$($LEER "$ENV_FILE" | sed -n 's/^[[:space:]]*DATABASE_URL[[:space:]]*=[[:space:]]*//p' | head -n1 || true)
             # systemd admite comillas alrededor del valor; el CLI no las quiere.
             DATABASE_URL=${DATABASE_URL%\"}; DATABASE_URL=${DATABASE_URL#\"}
@@ -146,7 +158,7 @@ jobs:
             npx prisma generate
             npx prisma migrate deploy
 
-            sudo systemctl restart running-api
+            sudo -n systemctl restart running-api
 
             # Espera activa en vez de `sleep 2`: el arranque de Nest tarda mas
             # cuando hay migraciones nuevas y el pool tiene que abrir conexiones.
@@ -159,5 +171,5 @@ jobs:
             done
 
             echo "▸ El health check no respondio en 20s. Ultimos logs:"
-            sudo journalctl -u running-api -n 50 --no-pager
+            sudo -n journalctl -u running-api -n 50 --no-pager
             exit 1
