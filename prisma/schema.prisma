@@ -1,0 +1,912 @@
+// Esquema de datos de PaceUp.
+//
+// Convenciones que se cumplen SIN excepcion en todo el archivo:
+//   - Distancias en metros (Int), duraciones en segundos (Int).
+//   - Ritmo en segundos por kilometro (Int).
+//   - Dinero en centavos (Int) + `currency` ISO. Nunca Float para dinero.
+//   - Fechas en UTC. Cada maraton guarda ademas su `timezone` IANA.
+//   - Borrado suave (`deletedAt`) donde perder el dato duele.
+//
+// El formateo (km/mi, min/km, `Bs 1.234,56`) es responsabilidad del cliente.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ENUMS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum UserRole {
+  runner
+  admin
+}
+
+enum Gender {
+  male
+  female
+  other
+  unspecified
+}
+
+enum Units {
+  metric
+  imperial
+}
+
+enum Theme {
+  light
+  dark
+  system
+}
+
+/// Estado de las inscripciones de una maraton (no de una inscripcion concreta).
+enum MarathonRegistrationStatus {
+  open
+  closing_soon
+  full
+  closed
+}
+
+enum ServiceFeeScope {
+  global
+  marathon
+}
+
+enum ServiceFeeType {
+  percent
+  fixed
+  mixed
+}
+
+/// Estado de la inscripcion de UN corredor a UNA maraton.
+enum RegistrationStatus {
+  draft
+  pending_payment
+  confirmed
+  cancelled
+  refunded
+}
+
+enum PaymentProviderName {
+  mock
+}
+
+enum PaymentMethod {
+  card
+  qr
+  bank_transfer
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum PlanLevel {
+  beginner
+  intermediate
+  advanced
+}
+
+enum TrainingSessionType {
+  easy
+  tempo
+  intervals
+  long
+  rest
+  recovery
+}
+
+enum TrainingPlanStatus {
+  active
+  completed
+  abandoned
+}
+
+enum TrainingPlanSessionStatus {
+  pending
+  completed
+  skipped
+  rescheduled
+}
+
+enum WorkoutSource {
+  app
+  manual
+  external
+}
+
+enum WorkoutType {
+  free_run
+  plan_session
+  goal_distance
+  goal_time
+  race
+}
+
+enum TrackingSessionStatus {
+  active
+  paused
+  finished
+  discarded
+}
+
+/// De donde llego una posicion. `osmand` y `traccar` existen desde ya porque el
+/// endpoint compatible con OsmAnd es una de las "puertas abiertas" del disenio.
+enum PositionSource {
+  app_batch
+  osmand
+  traccar
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  IDENTIDAD Y PERFIL
+// ═══════════════════════════════════════════════════════════════════════════
+
+model User {
+  id              String    @id @default(cuid())
+  /// citext: la comparacion es insensible a mayusculas, asi que
+  /// `Ana@Mail.com` y `ana@mail.com` son el mismo usuario a nivel de BD.
+  email           String    @unique @db.Citext
+  passwordHash    String
+  name            String
+  role            UserRole  @default(runner)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  /// Borrado de cuenta: se conserva la fila hasta purgar en diferido.
+  deletedAt       DateTime?
+
+  profile             UserProfile?
+  preferences         UserPreferences?
+  shoes               Shoe[]
+  sessions            AuthSession[]
+  passwordResetTokens PasswordResetToken[]
+  devices             Device[]
+  registrations       Registration[]
+  trainingPlans       TrainingPlan[]
+  workouts            Workout[]
+  trackingSessions    TrackingSession[]
+  positions           Position[]
+  feeConfigsUpdated   ServiceFeeConfig[]   @relation("ServiceFeeUpdatedBy")
+
+  @@index([role])
+  @@map("users")
+}
+
+model UserProfile {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  avatarUrl        String?
+  city             String?
+  country          String    @default("BO")
+  birthDate        DateTime? @db.Date
+  gender           Gender    @default(unspecified)
+  weightGrams      Int?
+  heightCm         Int?
+  /// Dorsal habitual, para prellenar el formulario de inscripcion.
+  defaultBibNumber String?
+
+  // ─── Salud ───
+  /// Lesiones declaradas: `[{ zone, since, notes }]`.
+  injuryFlags     Json    @default("[]")
+  avgSleepMinutes Int?
+  hydrationHabit  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_profiles")
+}
+
+model UserPreferences {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  units  Units  @default(metric)
+  theme  Theme  @default(system)
+  locale String @default("es-BO")
+
+  /// `{ push: bool, email: bool, raceReminders: bool, ... }`
+  notifications Json @default("{}")
+  /// `{ shareWorkouts: bool, liveTrackingOptIn: bool, ... }`
+  privacy       Json @default("{}")
+
+  /// Se persiste en el backend a proposito: sobrevive a una reinstalacion,
+  /// asi el usuario no vuelve a ver el onboarding en un telefono nuevo.
+  onboardingSeenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+model Shoe {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  brand String
+  model String
+
+  /// Se acumula solo: al consolidar un workout se suma su distancia a la
+  /// zapatilla principal de ese momento.
+  distanceMeters Int @default(0)
+  /// Default 800 km. Al superarlo se emite `shoe.wear_alert`.
+  alertThresholdMeters Int @default(800000)
+
+  isPrimary  Boolean   @default(false)
+  retiredAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId, isPrimary])
+  @@map("shoes")
+}
+
+/// Una sesion por dispositivo. El refresh token vive 60 dias y rota en cada
+/// uso, asi que un usuario que abre la app cada tanto no vuelve a loguearse.
+model AuthSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SOLO el hash. El token opaco original nunca se guarda.
+  refreshTokenHash String  @unique
+  deviceId         String
+  deviceName       String?
+  platform         String?
+  ip               String?
+  userAgent        String?
+
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  lastUsedAt  DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+
+  /// Cadena de rotacion. Si llega un token ya rotado, se revoca la cadena
+  /// entera de ese dispositivo: es senal de robo del token.
+  rotatedFromId String?      @unique
+  rotatedFrom   AuthSession? @relation("SessionRotation", fields: [rotatedFromId], references: [id], onDelete: SetNull)
+  rotatedTo     AuthSession? @relation("SessionRotation")
+
+  @@index([userId, deviceId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}
+
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// Igual que el refresh: solo el hash.
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+model Device {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// UUID que genera la app y persiste. Es la clave que usa el endpoint
+  /// compatible con OsmAnd para resolver `id -> dispositivo -> sesion activa`.
+  uniqueId String @unique
+
+  name       String?
+  platform   String?
+  appVersion String?
+  osVersion  String?
+  pushToken  String?
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  trackingSessions TrackingSession[]
+  positions        Position[]
+
+  @@index([userId])
+  @@map("devices")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  MARATONES
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Marathon {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+
+  startsAt DateTime
+  /// Zona IANA de la carrera. La API responde siempre en UTC; esto permite al
+  /// cliente mostrar "07:00 hora local de La Paz" sin adivinar.
+  timezone String   @default("America/La_Paz")
+
+  city    String
+  country String @default("BO")
+  lat     Float?
+  lng     Float?
+
+  distanceMeters Int
+  capacity       Int
+  /// Se incrementa dentro de la transaccion del pago, con SELECT ... FOR UPDATE.
+  slotsTaken     Int @default(0)
+
+  priceCents Int
+  currency   String @default("BOB")
+
+  registrationStatus  MarathonRegistrationStatus @default(open)
+  registrationClosesAt DateTime?
+
+  /// Recorrido como GeoJSON. Se envia simplificado al movil.
+  routeGeoJson Json?
+  /// Cronograma: `[{ time, title, description }]`.
+  schedule     Json  @default("[]")
+  /// Que incluye la inscripcion: `["remera", "medalla", "hidratacion"]`.
+  includes     Json  @default("[]")
+  /// Retiro de kit: `{ from, to, address, lat, lng }`.
+  kitPickup    Json?
+  coverUrl     String?
+
+  publishedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  /// Override del fee global para esta maraton. Null = usar el global.
+  serviceFeeConfigId String?
+  serviceFeeConfig   ServiceFeeConfig? @relation(fields: [serviceFeeConfigId], references: [id], onDelete: SetNull)
+
+  categories    MarathonCategory[]
+  extras        MarathonExtra[]
+  registrations Registration[]
+  trainingPlans TrainingPlan[]
+  trackingSessions TrackingSession[]
+
+  @@index([startsAt])
+  @@index([registrationStatus, startsAt])
+  @@index([city])
+  @@map("marathons")
+}
+
+model MarathonCategory {
+  id         String   @id @default(cuid())
+  marathonId String
+  marathon   Marathon @relation(fields: [marathonId], references: [id], onDelete: Cascade)
+
+  name   String
+  minAge Int?
+  maxAge Int?
+  /// Null = abierta a cualquier genero.
+  gender Gender?
+
+  extraPriceCents Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  registrations Registration[]
+
+  @@index([marathonId])
+  @@map("marathon_categories")
+}
+
+model MarathonExtra {
+  id         String   @id @default(cuid())
+  marathonId String
+  marathon   Marathon @relation(fields: [marathonId], references: [id], onDelete: Cascade)
+
+  name       String
+  priceCents Int
+  /// Null = sin limite de stock.
+  stock      Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([marathonId])
+  @@map("marathon_extras")
+}
+
+/// Configuracion del cargo por servicio. `enabled = false` lo desactiva por
+/// completo: `QuoteService` devuelve `serviceFee: null` y la UI no pinta la
+/// linea. Hay como mucho una fila con scope `global`.
+model ServiceFeeConfig {
+  id      String          @id @default(cuid())
+  scope   ServiceFeeScope
+  enabled Boolean         @default(false)
+
+  type ServiceFeeType @default(percent)
+  /// Puntos basicos: 1000 = 10%. Entero, para no arrastrar errores de coma flotante.
+  percentBps Int?
+  fixedCents Int?
+  minCents   Int?
+  maxCents   Int?
+
+  /// Etiqueta que ve el usuario en el desglose, ej. "Cargo por servicio".
+  label String @default("Cargo por servicio")
+
+  updatedByUserId String?
+  updatedBy       User?   @relation("ServiceFeeUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marathons Marathon[]
+
+  @@map("service_fee_configs")
+}
+
+model Registration {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  marathonId String
+  marathon   Marathon @relation(fields: [marathonId], references: [id], onDelete: Cascade)
+
+  categoryId String?
+  category   MarathonCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  status RegistrationStatus @default(draft)
+  /// Paso 1..3 del flujo. Permite retomar la inscripcion donde se dejo.
+  step   Int                @default(1)
+
+  /// Unico por maraton. Se asigna en la misma transaccion que confirma el pago.
+  bibNumber String?
+
+  /// Datos del formulario: `{ fullName, docId, phone, emergencyContact, ... }`.
+  personalData Json @default("{}")
+  /// Extras elegidos: `[{ extraId, name, quantity, priceCents }]`.
+  extras       Json @default("[]")
+
+  subtotalCents   Int    @default(0)
+  serviceFeeCents Int    @default(0)
+  /// Desglose exacto que se cobro: `[{ type, refId, label, quantity,
+  /// unitPriceCents, amountCents }]`. Se congela al confirmar. Sin el, un
+  /// comprobante emitido hoy mostraria los precios de manana.
+  quoteSnapshot   Json?
+  /// Copia exacta de la config aplicada. Cambiar el fee despues NO altera
+  /// comprobantes historicos.
+  serviceFeeSnapshot Json?
+  totalCents      Int    @default(0)
+  currency        String @default("BOB")
+
+  termsAcceptedAt DateTime?
+  registeredAt    DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  payments   Payment[]
+  raceResult RaceResult?
+  workouts   Workout[]
+
+  @@unique([marathonId, bibNumber])
+  @@index([userId, status])
+  @@index([marathonId, status])
+  @@map("registrations")
+}
+
+model Payment {
+  id             String       @id @default(cuid())
+  registrationId String
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  provider PaymentProviderName @default(mock)
+  method   PaymentMethod
+  status   PaymentStatus       @default(pending)
+
+  amountCents Int
+  currency    String @default("BOB")
+
+  /// SOLO datos enmascarados: `{ brand: "visa", last4: "4242" }`.
+  /// Nunca el PAN completo, ni en desarrollo.
+  methodDetails Json @default("{}")
+
+  /// Reintentar el checkout con la misma clave devuelve el mismo resultado
+  /// sin cobrar dos veces.
+  idempotencyKey String @unique
+
+  externalId    String?
+  receiptUrl    String?
+  failureReason String?
+  /// Para el metodo QR: cuando caduca el codigo.
+  expiresAt     DateTime?
+  paidAt        DateTime?
+  refundedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([registrationId, status])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ENTRENAMIENTO
+// ═══════════════════════════════════════════════════════════════════════════
+
+model TrainingPlanTemplate {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+
+  /// 5000, 10000, 21097 o 42195.
+  goalDistanceMeters Int
+  level              PlanLevel
+  totalWeeks         Int
+  weeklySessions     Int
+  avgWeeklyDistanceMeters Int
+
+  coverUrl String?
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions TrainingPlanTemplateSession[]
+  plans    TrainingPlan[]
+
+  @@index([goalDistanceMeters, level])
+  @@map("training_plan_templates")
+}
+
+model TrainingPlanTemplateSession {
+  id         String               @id @default(cuid())
+  templateId String
+  template   TrainingPlanTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  week    Int
+  /// 1 = lunes ... 7 = domingo (ISO-8601).
+  weekday Int
+  type    TrainingSessionType
+
+  targetDistanceMeters Int?
+  targetDurationSeconds Int?
+
+  /// Multiplicador sobre el ritmo base del usuario: 1.15 = 15% mas lento que
+  /// su ritmo de referencia. Asi la misma plantilla sirve a cualquier nivel.
+  paceFactor Float @default(1.0)
+
+  description  String?
+  /// Sesion clave de la semana (la que no conviene saltarse).
+  isKeySession Boolean @default(false)
+
+  planSessions TrainingPlanSession[]
+
+  @@unique([templateId, week, weekday])
+  @@index([templateId, week])
+  @@map("training_plan_template_sessions")
+}
+
+/// Instancia del plan para un usuario concreto, con fechas y ritmos reales.
+model TrainingPlan {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  templateId String?
+  template   TrainingPlanTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  /// Maraton objetivo. Si existe, el plan se ancla a la semana de la carrera.
+  marathonId String?
+  marathon   Marathon? @relation(fields: [marathonId], references: [id], onDelete: SetNull)
+
+  name       String
+  totalWeeks Int
+  startDate  DateTime @db.Date
+  endDate    DateTime @db.Date
+
+  /// Ritmo de referencia del usuario, del que salen los rangos de cada sesion.
+  /// Sale del mejor esfuerzo reciente via Riegel; si no hay datos, del nivel.
+  paceBasisSecPerKm Int
+
+  status   TrainingPlanStatus @default(active)
+  /// Solo un plan activo a la vez por usuario.
+  isActive Boolean            @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions TrainingPlanSession[]
+
+  @@index([userId, isActive])
+  @@map("training_plans")
+}
+
+model TrainingPlanSession {
+  id     String       @id @default(cuid())
+  planId String
+  plan   TrainingPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  templateSessionId String?
+  templateSession   TrainingPlanTemplateSession? @relation(fields: [templateSessionId], references: [id], onDelete: SetNull)
+
+  week          Int
+  weekday       Int
+  scheduledDate DateTime @db.Date
+  type          TrainingSessionType
+
+  targetDistanceMeters  Int?
+  targetDurationSeconds Int?
+  /// Rango de ritmo objetivo: paceFactor +- 4%.
+  paceMinSecPerKm       Int?
+  paceMaxSecPerKm       Int?
+
+  /// Ruta sugerida como GeoJSON.
+  suggestedRoute Json?
+
+  status               TrainingPlanSessionStatus @default(pending)
+  rescheduledFromDate  DateTime?                 @db.Date
+
+  /// El entrenamiento que completo esta sesion.
+  workoutId String?  @unique
+  workout   Workout? @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([planId, scheduledDate])
+  @@index([planId, week])
+  @@map("training_plan_sessions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  ENTRENAMIENTOS (WORKOUTS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Workout {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// UUID que genera el cliente ANTES de tener red. Es la clave de
+  /// idempotencia de la sincronizacion offline: reenviar el mismo workout no
+  /// crea un duplicado.
+  clientUuid String @unique
+
+  source WorkoutSource @default(app)
+  type   WorkoutType   @default(free_run)
+
+  planSessionId  String?
+  registrationId String?
+  registration   Registration? @relation(fields: [registrationId], references: [id], onDelete: SetNull)
+
+  startedAt DateTime
+  endedAt   DateTime?
+
+  // ─── Metricas consolidadas POR EL SERVIDOR desde las posiciones ───
+  durationSeconds      Int  @default(0)
+  /// Excluye las pausas. La auto-pausa la detecta el cliente.
+  movingSeconds        Int  @default(0)
+  distanceMeters       Int  @default(0)
+  avgPaceSecPerKm      Int?
+  avgSpeedMps          Float?
+  elevationGainMeters  Int  @default(0)
+  calories             Int?
+  /// Indice (base 0) del kilometro mas rapido, para el "mejor km".
+  bestKmIndex          Int?
+
+  /// Lo que dijo el cliente. Se guarda para comparar y detectar deriva, pero
+  /// la fuente de verdad son las metricas de arriba.
+  clientReported Json?
+
+  /// 1..5, como se sintio el corredor.
+  feeling Int?
+  notes   String?
+
+  /// False mientras el cliente aun tenga cambios locales sin subir.
+  isSynced  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  splits          WorkoutSplit[]
+  laps            WorkoutLap[]
+  positions       Position[]
+  trackingSession TrackingSession?
+  planSession     TrainingPlanSession?
+  raceResult      RaceResult?
+
+  @@index([userId, startedAt(sort: Desc)])
+  @@index([userId, type, startedAt(sort: Desc)])
+  @@index([registrationId])
+  @@map("workouts")
+}
+
+/// Un parcial por kilometro completado.
+model WorkoutSplit {
+  id        String  @id @default(cuid())
+  workoutId String
+  workout   Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+
+  /// Base 0: el split 0 es el primer kilometro.
+  index Int
+
+  distanceMeters      Int
+  durationSeconds     Int
+  paceSecPerKm        Int
+  elevationGainMeters Int @default(0)
+
+  @@unique([workoutId, index])
+  @@map("workout_splits")
+}
+
+/// Vuelta de una sesion por intervalos ("Lap 6/10").
+model WorkoutLap {
+  id        String  @id @default(cuid())
+  workoutId String
+  workout   Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+
+  index                Int
+  targetPaceSecPerKm   Int?
+  actualPaceSecPerKm   Int?
+  durationSeconds      Int
+
+  @@unique([workoutId, index])
+  @@map("workout_laps")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TRACKING GPS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Sesion de captura de GPS. Se autentica con `ingestToken`, no con el JWT del
+/// usuario: token de vida corta y alcance minimo, que solo sirve para mandar
+/// puntos a ESTA sesion.
+model TrackingSession {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  workoutId String?  @unique
+  workout   Workout? @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  marathonId String?
+  marathon   Marathon? @relation(fields: [marathonId], references: [id], onDelete: SetNull)
+
+  deviceId String?
+  device   Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  status TrackingSessionStatus @default(active)
+
+  /// Solo el hash del token de ingesta.
+  ingestToken    String    @unique
+  startedAt      DateTime  @default(now())
+  lastPositionAt DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId, status])
+  @@index([marathonId, status])
+  @@map("tracking_sessions")
+}
+
+/// Punto GPS. TABLA PARTICIONADA POR MES sobre `recordedAt`.
+///
+/// Prisma no soporta particionado declarativo: la conversion vive en SQL crudo
+/// dentro de la migracion inicial, y un job crea las particiones futuras. Ver
+/// `docs/decisiones.md`.
+///
+/// Consecuencia de particionar: toda clave primaria y todo indice unico DEBEN
+/// incluir la columna de particion (`recordedAt`). Por eso la PK es compuesta y
+/// el dedupe es `(clientPointId, recordedAt)` y no solo `clientPointId`.
+model Position {
+  id BigInt @default(autoincrement())
+
+  trackingSessionId String
+  workoutId         String?
+  workout           Workout? @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  deviceId String?
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  /// Hora del reloj del dispositivo. Es la columna de particion.
+  recordedAt DateTime
+  /// Hora de llegada al servidor. La diferencia delata lotes atrasados.
+  receivedAt DateTime @default(now())
+
+  lat            Float
+  lng            Float
+  altitude       Float?
+  speedMps       Float?
+  /// Los puntos con mas de 30 m de error se descartan al consolidar metricas.
+  accuracyMeters Float?
+  heading        Float?
+  batteryLevel   Int?
+
+  source PositionSource @default(app_batch)
+
+  /// Identificador que pone el cliente a cada punto. Permite reenviar un lote
+  /// entero sin miedo: los repetidos caen en ON CONFLICT DO NOTHING.
+  clientPointId String
+
+  @@id([id, recordedAt])
+  @@unique([clientPointId, recordedAt])
+  @@index([trackingSessionId, recordedAt])
+  @@index([userId, recordedAt])
+  @@index([workoutId, recordedAt])
+  @@map("positions")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  CARRERAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+model RaceResult {
+  id             String       @id @default(cuid())
+  registrationId String       @unique
+  registration   Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  workoutId String?  @unique
+  workout   Workout? @relation(fields: [workoutId], references: [id], onDelete: SetNull)
+
+  /// Tiempo de llegada oficial (gun time), en segundos.
+  finishTimeSeconds Int
+  /// Tiempo de chip, en segundos. Puede faltar si no hubo cronometraje.
+  chipTimeSeconds   Int?
+
+  avgPaceSecPerKm     Int?
+  avgSpeedMps         Float?
+  distanceMeters      Int
+  elevationGainMeters Int  @default(0)
+  bestKmIndex         Int?
+
+  overallRank  Int?
+  categoryRank Int?
+
+  finishedAt   DateTime
+  /// PNG generado con sharp para compartir el resultado.
+  shareCardUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  checkpoints RaceCheckpoint[]
+
+  @@index([overallRank])
+  @@map("race_results")
+}
+
+/// Marcador de paso, uno cada 5 km.
+model RaceCheckpoint {
+  id           String     @id @default(cuid())
+  raceResultId String
+  raceResult   RaceResult @relation(fields: [raceResultId], references: [id], onDelete: Cascade)
+
+  /// Kilometro del marcador: 5, 10, 15...
+  kmMark Int
+  lat    Float?
+  lng    Float?
+
+  passedAt     DateTime
+  /// Segundos desde la salida hasta este marcador.
+  splitSeconds Int
+
+  @@unique([raceResultId, kmMark])
+  @@map("race_checkpoints")
+}

@@ -1,0 +1,129 @@
+# Despliegue automatico del backend.
+#
+# La compilacion entera (TypeScript, lint, tests) corre en el runner de GitHub.
+# El VPS nunca ejecuta `tsc`: solo recibe el `dist/` ya construido, instala
+# dependencias, aplica migraciones y reinicia el servicio. Asi un error de
+# compilacion se ve en el PR y no deja el servidor a medio desplegar.
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  # Permite lanzarlo a mano desde la pestana Actions.
+  workflow_dispatch:
+
+# Dos push seguidos a main no deben pisarse a mitad de rsync.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compilar y probar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      # El cliente de Prisma no esta versionado: sin generarlo no compila.
+      - name: Generar cliente de Prisma
+        run: npx prisma generate
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Tests unitarios
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Solo lo que el servidor necesita. node_modules NO viaja: lleva binarios
+      # nativos (sharp, argon2) que se instalan en destino con `npm ci`.
+      - name: Empaquetar artefacto
+        run: |
+          tar -czf release.tar.gz \
+            dist \
+            prisma \
+            prisma.config.ts \
+            package.json \
+            package-lock.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: release.tar.gz
+          retention-days: 7
+
+  deploy:
+    name: Publicar en el VPS
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
+
+      - name: Preparar clave SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY_API }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -p "${{ secrets.VPS_PORT || 22 }}" -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Subir artefacto
+        run: |
+          scp -i ~/.ssh/id_deploy -P "${{ secrets.VPS_PORT || 22 }}" \
+            release.tar.gz \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/release.tar.gz"
+
+      - name: Desplegar
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY_API }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            APP_DIR=/opt/running-api
+
+            cd "$APP_DIR"
+
+            # dist/ se borra entero: un fichero .js huerfano de un rename viejo
+            # se seguiria cargando y depurarlo es una tarde perdida.
+            rm -rf dist
+            tar -xzf /tmp/release.tar.gz -C "$APP_DIR"
+            rm -f /tmp/release.tar.gz
+
+            # Con devDependencies: el CLI de prisma y ts-node (que carga
+            # prisma.config.ts) viven ahi y hacen falta para migrar.
+            npm ci
+
+            npx prisma generate
+            npx prisma migrate deploy
+
+            sudo systemctl restart running-api
+
+            # Espera activa en vez de `sleep 2`: el arranque de Nest tarda mas
+            # cuando hay migraciones nuevas y el pool tiene que abrir conexiones.
+            for i in $(seq 1 20); do
+              if curl -fsS http://127.0.0.1:3000/health > /dev/null; then
+                echo "▸ Health OK tras ${i}s"
+                exit 0
+              fi
+              sleep 1
+            done
+
+            echo "▸ El health check no respondio en 20s. Ultimos logs:"
+            sudo journalctl -u running-api -n 50 --no-pager
+            exit 1

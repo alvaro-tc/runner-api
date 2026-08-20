@@ -1,0 +1,737 @@
+import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../../database/prisma.service';
+import { AppException } from '../../common/errors/app.exception';
+import { ErrorCode } from '../../common/errors/error-codes';
+import { exigirClaveDeIdempotencia } from '../../common/idempotency';
+import { RegistrationsService } from '../registrations/registrations.service';
+import { PaymentMethod, PaymentStatus } from '../../../generated/prisma/enums';
+import type { Payment, Prisma } from '../../../generated/prisma/client';
+import { AppConfigService } from '../../config/app-config.service';
+import { MockPaymentProvider, MotivoAsincrono } from './mock/mock-payment.provider';
+import { PAYMENT_PROVIDER, type IntentoDePago, type PaymentProvider } from './payment-provider';
+import type { CheckoutDto } from './dto/payment.dto';
+import { EventoDeWebhook, type WebhookEventDto } from './dto/webhook.dto';
+import { ResultadoDeVerificacion, verificar } from './webhook/signature';
+import { ReceiptService, type LineaDeComprobante } from './receipt/receipt.service';
+
+/**
+ * Orquesta el paso 3: cobra y, si el cobro pasa, confirma la inscripcion.
+ *
+ * El orden importa y es este:
+ *
+ * 1. `prepararParaPago()` valida todo lo barato —carrera abierta, cupo,
+ *    categoria, datos personales— y congela el precio. Nadie paga por una
+ *    carrera que ya estaba cerrada.
+ * 2. Se cobra contra el proveedor.
+ * 3. Si el cobro pasa, `confirmarPago()` toma el cupo y emite el dorsal dentro
+ *    de la transaccion con la maraton bloqueada.
+ * 4. Si ese ultimo paso falla —el ultimo cupo se fue mientras se procesaba la
+ *    tarjeta— se **reembolsa** y se devuelve el error de dominio. Es el unico
+ *    orden en el que nadie termina cobrado y sin inscripcion.
+ */
+@Injectable()
+export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly registrations: RegistrationsService,
+    private readonly config: AppConfigService,
+    private readonly receipts: ReceiptService,
+    @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
+  ) {}
+
+  async checkout(userId: string, registrationId: string, dto: CheckoutDto, idempotencyKey: string) {
+    exigirClaveDeIdempotencia(idempotencyKey);
+
+    const repetido = await this.reutilizar(userId, registrationId, idempotencyKey);
+    if (repetido) return repetido;
+
+    const { registro, cotizacion } = await this.registrations.prepararParaPago(
+      userId,
+      registrationId,
+    );
+
+    const intento = await this.provider.createIntent({
+      amountCents: cotizacion.totalCents,
+      currency: cotizacion.currency,
+      method: dto.method,
+      card: dto.card,
+      metadata: {
+        registrationId: registro.id,
+        marathonId: registro.marathonId,
+        userId,
+      },
+    });
+
+    // La fila se crea con lo que devolvio el proveedor, aprobado o no: un cobro
+    // rechazado tambien es historia, y sin fila no habria a que asociar la
+    // clave de idempotencia —un reintento con la misma clave volveria a cobrar.
+    const pago = await this.crearPago(registro.id, idempotencyKey, intento);
+
+    if (intento.status === PaymentStatus.failed) {
+      this.logger.warn(
+        `Cobro rechazado de la inscripcion ${registro.id}: ${intento.failureReason ?? '-'}`,
+      );
+
+      throw new AppException(
+        ErrorCode.PAYMENT_DECLINED,
+        'El pago fue rechazado',
+        HttpStatus.PAYMENT_REQUIRED,
+        [{ paymentId: pago.id, reason: intento.failureReason }],
+      );
+    }
+
+    if (intento.status !== PaymentStatus.paid) {
+      // Metodos asincronos: el QR se paga solo a los pocos segundos y lo
+      // recoge el polling de `GET /payments/:id`; la transferencia espera a que
+      // una persona la confirme desde el panel. En los dos casos la inscripcion
+      // se queda en `pending_payment` y la app ya tiene que pintar el QR o los
+      // datos bancarios que vienen en `methodDetails`.
+      return {
+        payment: this.toDto(pago),
+        registration: await this.registrations.detalleDe(registro.id),
+      };
+    }
+
+    return this.liquidar(pago);
+  }
+
+  /**
+   * Fuerza la confirmacion de un cobro pendiente. **Solo fuera de produccion.**
+   *
+   * Existe para no tener que esperar los segundos del QR ni montar un banco
+   * falso cuando estas probando la pantalla a mano. En produccion no responde:
+   * un endpoint que da por pagado lo que nadie pago no puede existir donde hay
+   * dinero de verdad, aunque este autenticado.
+   */
+  async mockConfirm(userId: string, paymentId: string) {
+    if (this.config.isProduction) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'No se encontro ese pago', HttpStatus.NOT_FOUND);
+    }
+
+    const pago = await this.buscarPropio(userId, paymentId);
+
+    if (pago.status !== PaymentStatus.pending) {
+      throw new AppException(
+        ErrorCode.PAYMENT_ALREADY_SETTLED,
+        'Ese cobro ya esta cerrado',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const acreditado = await this.acreditar(pago);
+
+    return {
+      payment: this.toDto(acreditado),
+      registration: await this.registrations.detalleDe(pago.registrationId),
+    };
+  }
+
+  /**
+   * Un pago propio. El filtro por dueno de la inscripcion ES la autorizacion.
+   *
+   * Es tambien el endpoint de **polling** del QR: cada lectura resuelve el
+   * cobro si ya toca —se pago solo, o caduco—, asi que el cliente solo tiene
+   * que sondear esta ruta y mirar `status`.
+   */
+  async obtener(userId: string, paymentId: string) {
+    const pago = await this.buscarPropio(userId, paymentId);
+
+    return this.toDto(await this.resolverPendiente(pago));
+  }
+
+  /** Historial de intentos de cobro de una inscripcion, del mas nuevo al mas viejo. */
+  async listarDeInscripcion(userId: string, registrationId: string) {
+    const inscripcion = await this.prisma.registration.findFirst({
+      where: { id: registrationId, userId, deletedAt: null },
+      select: { id: true },
+    });
+
+    if (!inscripcion) {
+      throw new AppException(
+        ErrorCode.NOT_FOUND,
+        'No se encontro esa inscripcion',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    const pagos = await this.prisma.payment.findMany({
+      where: { registrationId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const resueltos = await Promise.all(pagos.map((p) => this.resolverPendiente(p)));
+
+    return resueltos.map((p) => this.toDto(p));
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Webhook del proveedor
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Punto de entrada del webhook: verifica la firma y aplica el evento.
+   *
+   * Los tres motivos de rechazo —falta la cabecera, la firma no cuadra, llego
+   * fuera de la ventana— responden **el mismo error**. Distinguirlos le diria a
+   * quien esta probando cual de las tres cosas acerto, y eso es exactamente el
+   * mapa que necesita para seguir probando.
+   */
+  async recibirWebhook(
+    cuerpoCrudo: Buffer | undefined,
+    cabecera: string | string[] | undefined,
+    evento: WebhookEventDto,
+  ) {
+    const resultado = verificar({
+      // Si no hay cuerpo crudo se cae a la version serializada: en ese camino la
+      // firma casi nunca cuadrara, que es justo lo que debe pasar. Nunca se da
+      // por buena una peticion por no haber podido comprobarla.
+      cuerpo: cuerpoCrudo?.toString('utf8') ?? JSON.stringify(evento),
+      cabecera: Array.isArray(cabecera) ? cabecera[0] : cabecera,
+      secreto: this.config.get('PAYMENT_WEBHOOK_SECRET'),
+      toleranciaSegundos: this.config.get('PAYMENT_WEBHOOK_TOLERANCE_SECONDS'),
+    });
+
+    if (resultado !== ResultadoDeVerificacion.ok) {
+      this.logger.warn(`Webhook rechazado (${resultado}) para el evento ${evento.id}`);
+
+      throw new AppException(
+        ErrorCode.INVALID_WEBHOOK_SIGNATURE,
+        'Firma del webhook invalida',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const aplicado = await this.aplicarEvento(evento);
+
+    return { received: true, ...aplicado };
+  }
+
+  /**
+   * Aplica un evento del proveedor. La firma ya se verifico en el controlador.
+   *
+   * **No se lleva una tabla de eventos procesados.** No hace falta: las tres
+   * operaciones son idempotentes por estado —`acreditar()` condiciona su update
+   * a `status: pending`, `confirmarPago()` devuelve la inscripcion tal cual si
+   * ya estaba confirmada, y reembolsar dos veces deja el mismo `refunded`—. Una
+   * tabla de deduplicacion seria una segunda linea de defensa para algo que ya
+   * es correcto, con su propia limpieza y su propio indice.
+   *
+   * Nunca lanza por un evento que no se puede aplicar: devuelve `handled:
+   * false`. Un PSP que recibe un error reintenta, y reintentar un evento que
+   * nunca vamos a poder procesar es un bucle infinito con nuestro nombre encima.
+   */
+  async aplicarEvento(evento: WebhookEventDto): Promise<{ handled: boolean; reason?: string }> {
+    const pago = await this.prisma.payment.findFirst({
+      where: { externalId: evento.data.externalId },
+    });
+
+    if (!pago) {
+      this.logger.warn(`Webhook ${evento.id}: no existe el cobro ${evento.data.externalId}`);
+      return { handled: false, reason: 'unknown_payment' };
+    }
+
+    switch (evento.type) {
+      case EventoDeWebhook.payment_paid:
+        return this.eventoPagado(pago, evento);
+      case EventoDeWebhook.payment_failed:
+        return this.eventoFallido(pago, evento);
+      case EventoDeWebhook.payment_refunded:
+        return this.eventoReembolsado(pago, evento);
+      default:
+        return { handled: false, reason: 'unsupported_event' };
+    }
+  }
+
+  private async eventoPagado(pago: Payment, evento: WebhookEventDto) {
+    if (pago.status !== PaymentStatus.pending) {
+      // Reintento del proveedor sobre algo ya cerrado. Es lo normal, no un error.
+      return { handled: false, reason: 'already_settled' };
+    }
+
+    const acreditado = await this.acreditar(pago);
+
+    this.logger.log(`Webhook ${evento.id}: cobro ${pago.id} -> ${acreditado.status}`);
+
+    return { handled: acreditado.status !== PaymentStatus.pending };
+  }
+
+  private async eventoFallido(pago: Payment, evento: WebhookEventDto) {
+    const { count } = await this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.pending },
+      data: {
+        status: PaymentStatus.failed,
+        failureReason: evento.data.failureReason ?? 'provider_declined',
+      },
+    });
+
+    if (count === 0) return { handled: false, reason: 'already_settled' };
+
+    this.logger.log(`Webhook ${evento.id}: cobro ${pago.id} rechazado por el proveedor`);
+
+    return { handled: true };
+  }
+
+  private async eventoReembolsado(pago: Payment, evento: WebhookEventDto) {
+    if (pago.status === PaymentStatus.refunded) {
+      return { handled: false, reason: 'already_settled' };
+    }
+
+    if (pago.status !== PaymentStatus.paid) {
+      return { handled: false, reason: 'not_paid' };
+    }
+
+    await this.marcarReembolsado(pago, evento.data.failureReason ?? 'provider_refund');
+
+    // Un reembolso que llega del proveedor —una devolucion, un contracargo— no
+    // lo pidio el usuario, asi que hay que soltar el cupo por el: la plaza
+    // vuelve al pozo y la inscripcion queda `refunded`.
+    await this.registrations.liberarPorReembolso(pago.registrationId);
+
+    this.logger.log(`Webhook ${evento.id}: cobro ${pago.id} reembolsado por el proveedor`);
+
+    return { handled: true };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Reembolsos
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Devuelve el dinero de una inscripcion que se acaba de cancelar.
+   *
+   * La llama `RegistrationsService.cancelar()` **despues** de liberar el cupo.
+   * Ese orden importa: si el reembolso falla, el cupo ya volvio al pozo y lo
+   * que queda pendiente es devolver dinero —resoluble a mano desde el panel—.
+   * Al reves, un fallo dejaria una plaza bloqueada para siempre.
+   *
+   * No lanza: cancelar tiene que funcionar aunque el proveedor este caido.
+   * Devuelve cuantos cobros se reembolsaron para que quede en el log.
+   */
+  async reembolsarDeInscripcion(registrationId: string): Promise<number> {
+    const pagados = await this.prisma.payment.findMany({
+      where: { registrationId, status: PaymentStatus.paid },
+    });
+
+    let reembolsados = 0;
+
+    for (const pago of pagados) {
+      try {
+        if (pago.externalId) await this.provider.refund(pago.externalId);
+        await this.marcarReembolsado(pago, 'cancelled_by_user');
+        reembolsados += 1;
+      } catch (error) {
+        this.logger.error(
+          `No se pudo reembolsar el cobro ${pago.id} al cancelar la inscripcion ` +
+            `${registrationId}: requiere intervencion manual`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    }
+
+    return reembolsados;
+  }
+
+  private marcarReembolsado(pago: Payment, motivo: string): Promise<unknown> {
+    return this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.paid },
+      data: { status: PaymentStatus.refunded, refundedAt: new Date(), failureReason: motivo },
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Comprobante
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * URL del comprobante en PDF. Se genera la primera vez y se reutiliza.
+   *
+   * Se cachea en `receiptUrl` porque el documento no puede cambiar: sale de los
+   * datos congelados de la inscripcion, asi que regenerarlo daria siempre lo
+   * mismo y solo gastaria CPU y disco. Si el archivo se borrara, basta con
+   * vaciar la columna.
+   */
+  async comprobante(userId: string, paymentId: string): Promise<{ url: string }> {
+    const pago = await this.buscarPropio(userId, paymentId);
+
+    if (pago.status !== PaymentStatus.paid) {
+      throw new AppException(
+        ErrorCode.RECEIPT_NOT_AVAILABLE,
+        'Solo hay comprobante de un pago cobrado',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (pago.receiptUrl) return { url: pago.receiptUrl };
+
+    const registro = await this.prisma.registration.findUniqueOrThrow({
+      where: { id: pago.registrationId },
+      include: { marathon: true },
+    });
+
+    const url = await this.receipts.generar({
+      paymentId: pago.id,
+      externalId: pago.externalId,
+      paidAt: pago.paidAt ?? pago.createdAt,
+      method: pago.method,
+      methodDetails: detalleDeMetodo(pago.methodDetails),
+      items: lineasDe(registro.quoteSnapshot),
+      subtotalCents: registro.subtotalCents,
+      serviceFeeLabel: etiquetaDeFee(registro.serviceFeeSnapshot),
+      serviceFeeCents: registro.serviceFeeCents,
+      totalCents: registro.totalCents,
+      marathonName: registro.marathon.name,
+      marathonCity: registro.marathon.city,
+      marathonStartsAt: registro.marathon.startsAt,
+      marathonTimezone: registro.marathon.timezone,
+      bibNumber: registro.bibNumber,
+      runnerName: datoPersonal(registro.personalData, 'fullName'),
+      runnerDocId: datoPersonal(registro.personalData, 'docId'),
+    });
+
+    await this.prisma.payment.update({ where: { id: pago.id }, data: { receiptUrl: url } });
+
+    return { url };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Internos
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** Lectura autorizada de un pago propio: un id ajeno responde 404. */
+  private async buscarPropio(userId: string, paymentId: string): Promise<Payment> {
+    const pago = await this.prisma.payment.findFirst({
+      where: { id: paymentId, registration: { userId, deletedAt: null } },
+    });
+
+    if (!pago) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'No se encontro ese pago', HttpStatus.NOT_FOUND);
+    }
+
+    return pago;
+  }
+
+  /**
+   * Con el cobro ya acreditado, confirma la inscripcion.
+   *
+   * Es el punto de encuentro de los tres metodos: la tarjeta llega aca en el
+   * mismo request, el QR cuando lo recoge el polling, y la transferencia cuando
+   * alguien la confirma desde el panel. Uno solo, para que el dorsal y el cupo
+   * se emitan siempre igual.
+   */
+  private async liquidar(pago: Payment) {
+    try {
+      const registration = await this.registrations.confirmarPago(pago.registrationId);
+      return { payment: this.toDto(pago), registration };
+    } catch (error) {
+      await this.compensar(pago, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Hace avanzar un cobro pendiente si ya le toca. Se llama en cada lectura.
+   *
+   * Resolver al leer y no con un job periodico es deliberado: el estado tiene
+   * que ser correcto **cuando alguien lo mira**, y quien lo mira es siempre el
+   * polling del cliente. Un cron que barra los vencidos hara falta el dia que
+   * haya que liberar recursos sin que nadie pregunte, no antes.
+   */
+  private async resolverPendiente(pago: Payment): Promise<Payment> {
+    if (pago.status !== PaymentStatus.pending) return pago;
+
+    const vencido = pago.expiresAt !== null && pago.expiresAt.getTime() <= Date.now();
+
+    if (vencido) return this.caducar(pago);
+
+    // La transferencia bancaria no se resuelve sola por diseno: espera a una
+    // persona. Solo el QR tiene reloj.
+    if (pago.method !== PaymentMethod.qr) return pago;
+
+    const listo =
+      this.provider instanceof MockPaymentProvider
+        ? this.provider.autoConfirmaEn(pago.createdAt).getTime() <= Date.now()
+        : false;
+
+    return listo ? this.acreditar(pago) : pago;
+  }
+
+  private async caducar(pago: Payment): Promise<Payment> {
+    await this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.pending },
+      data: { status: PaymentStatus.failed, failureReason: MotivoAsincrono.qr_expired },
+    });
+
+    this.logger.log(`Cobro ${pago.id} caducado sin pagarse`);
+
+    return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+  }
+
+  /**
+   * Da por cobrado un pago pendiente y confirma la inscripcion detras.
+   *
+   * El `updateMany` condicionado a `status: pending` es lo que hace seguro que
+   * dos sondeos simultaneos entren aqui a la vez: solo uno cambia la fila, y
+   * solo ese sigue hasta la confirmacion. El otro se encuentra el trabajo
+   * hecho. Sin esa condicion, dos polls podrian pedir dos dorsales.
+   */
+  private async acreditar(pago: Payment): Promise<Payment> {
+    const intento = await this.provider.confirm(pago.externalId ?? '');
+
+    if (intento.status === PaymentStatus.failed) {
+      await this.prisma.payment.updateMany({
+        where: { id: pago.id, status: PaymentStatus.pending },
+        data: { status: PaymentStatus.failed, failureReason: intento.failureReason },
+      });
+
+      return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+    }
+
+    if (intento.status !== PaymentStatus.paid) return pago;
+
+    const { count } = await this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.pending },
+      data: { status: PaymentStatus.paid, paidAt: new Date(), failureReason: null },
+    });
+
+    const acreditado = await this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+
+    if (count === 1) {
+      try {
+        await this.registrations.confirmarPago(pago.registrationId);
+      } catch (error) {
+        // Aca no se puede propagar: quien llama esta sondeando un estado, no
+        // comprando. Se compensa y se devuelve la fila reembolsada, que es lo
+        // que el cliente tiene que ver y pintar.
+        await this.compensar(acreditado, error);
+        return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+      }
+    }
+
+    return acreditado;
+  }
+
+  /**
+   * Da por cobrada una transferencia bancaria, por decision de un admin.
+   *
+   * Es la unica via de cobro que no pasa por el proveedor, y no puede pasar:
+   * quien confirma es una persona que ha visto el dinero en la cuenta del banco.
+   * Por eso se limita a `bank_transfer` —una tarjeta rechazada no se arregla
+   * declarandola pagada— y por eso deja rastro de quien lo hizo.
+   *
+   * Reutiliza `confirmarPago()` igual que el resto: el cupo y el dorsal se
+   * emiten en la misma transaccion de siempre. Aqui el `updateMany` condicionado
+   * evita que dos admins impacientes pidan dos dorsales.
+   */
+  async acreditarManualmente(paymentId: string, adminUserId: string, referencia?: string) {
+    const pago = await this.prisma.payment.findUnique({ where: { id: paymentId } });
+
+    if (!pago) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'El pago no existe', HttpStatus.NOT_FOUND);
+    }
+
+    if (pago.method !== PaymentMethod.bank_transfer) {
+      throw new AppException(
+        ErrorCode.PAYMENT_METHOD_NOT_SUPPORTED,
+        'Solo se confirman a mano los pagos por transferencia bancaria',
+        HttpStatus.BAD_REQUEST,
+        [{ method: pago.method }],
+      );
+    }
+
+    if (pago.status !== PaymentStatus.pending) {
+      throw new AppException(
+        ErrorCode.PAYMENT_ALREADY_SETTLED,
+        'Ese pago ya esta cerrado',
+        HttpStatus.CONFLICT,
+        [{ status: pago.status }],
+      );
+    }
+
+    const { count } = await this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.pending },
+      data: {
+        status: PaymentStatus.paid,
+        paidAt: new Date(),
+        failureReason: null,
+        methodDetails: {
+          ...(pago.methodDetails as object),
+          bank: { reference: referencia ?? null, confirmedBy: adminUserId },
+        },
+      },
+    });
+
+    if (count === 1) await this.registrations.confirmarPago(pago.registrationId);
+
+    this.logger.log(`Transferencia ${pago.id} confirmada a mano por ${adminUserId}`);
+
+    return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+  }
+
+  /**
+   * Reintentar con la misma clave devuelve el mismo resultado sin volver a
+   * cobrar.
+   *
+   * Es lo que hace seguro que la app reintente cuando se le cae la conexion
+   * justo despues de mandar el checkout: sin esto, el usuario que toca "pagar"
+   * dos veces por nerviosismo paga dos veces.
+   */
+  private async reutilizar(userId: string, registrationId: string, clave: string) {
+    const previo = await this.prisma.payment.findUnique({
+      where: { idempotencyKey: clave },
+      include: { registration: { select: { id: true, userId: true } } },
+    });
+
+    if (!previo) return null;
+
+    if (previo.registration.userId !== userId || previo.registrationId !== registrationId) {
+      throw new AppException(
+        ErrorCode.IDEMPOTENCY_KEY_CONFLICT,
+        'Esa clave de idempotencia ya se uso para otro cobro',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (previo.status === PaymentStatus.failed) {
+      throw new AppException(
+        ErrorCode.PAYMENT_DECLINED,
+        'El pago fue rechazado',
+        HttpStatus.PAYMENT_REQUIRED,
+        [{ paymentId: previo.id, reason: previo.failureReason }],
+      );
+    }
+
+    return {
+      payment: this.toDto(previo),
+      registration: await this.registrations.detalleDe(registrationId),
+    };
+  }
+
+  private crearPago(
+    registrationId: string,
+    idempotencyKey: string,
+    intento: IntentoDePago,
+  ): Promise<Payment> {
+    return this.prisma.payment.create({
+      data: {
+        registrationId,
+        provider: this.provider.name,
+        method: intento.method,
+        status: intento.status,
+        amountCents: intento.amountCents,
+        currency: intento.currency,
+        methodDetails: intento.methodDetails as unknown as Prisma.InputJsonValue,
+        idempotencyKey,
+        externalId: intento.externalId,
+        expiresAt: intento.expiresAt,
+        failureReason: intento.failureReason,
+        paidAt: intento.status === PaymentStatus.paid ? new Date() : null,
+      },
+    });
+  }
+
+  /**
+   * El cobro paso pero la inscripcion no se pudo confirmar: se devuelve el
+   * dinero antes de propagar el error.
+   *
+   * Pasa cuando el ultimo cupo se va mientras el proveedor procesa la tarjeta.
+   * Es raro, pero es exactamente el caso en el que un usuario quedaria cobrado
+   * y sin carrera, asi que se compensa siempre y se deja rastro en el log.
+   */
+  private async compensar(pago: Payment, causa: unknown): Promise<void> {
+    const motivo = causa instanceof AppException ? causa.code : 'INTERNAL_ERROR';
+
+    this.logger.error(
+      `Cobro ${pago.id} aprobado pero la inscripcion ${pago.registrationId} no se confirmo ` +
+        `(${motivo}): se reembolsa`,
+    );
+
+    try {
+      if (pago.externalId) await this.provider.refund(pago.externalId);
+
+      await this.prisma.payment.update({
+        where: { id: pago.id },
+        data: {
+          status: PaymentStatus.refunded,
+          refundedAt: new Date(),
+          failureReason: motivo,
+        },
+      });
+
+      await this.registrations.devolverAPendiente(pago.registrationId);
+    } catch (fallo) {
+      // El reembolso automatico fallo: se registra fuerte para que quede en el
+      // panel de admin y alguien lo resuelva a mano. Nunca se traga el error
+      // original, que es el que el usuario tiene que ver.
+      this.logger.error(
+        `No se pudo reembolsar el cobro ${pago.id}: requiere intervencion manual`,
+        fallo instanceof Error ? fallo.stack : undefined,
+      );
+    }
+  }
+
+  private toDto(pago: Payment) {
+    return {
+      id: pago.id,
+      registrationId: pago.registrationId,
+      method: pago.method,
+      status: pago.status,
+      amountCents: pago.amountCents,
+      currency: pago.currency,
+      methodDetails: (pago.methodDetails ?? {}) as Record<string, unknown>,
+      failureReason: pago.failureReason,
+      expiresAt: pago.expiresAt?.toISOString() ?? null,
+      paidAt: pago.paidAt?.toISOString() ?? null,
+      refundedAt: pago.refundedAt?.toISOString() ?? null,
+      createdAt: pago.createdAt.toISOString(),
+    };
+  }
+}
+
+/**
+ * Lectores del JSON de la base.
+ *
+ * Una columna JSON no tiene esquema: lo escribe siempre este codigo, pero una
+ * fila vieja o tocada a mano no deberia tumbar la generacion de un comprobante.
+ * Se comprueba la forma y se cae a un valor neutro.
+ */
+function detalleDeMetodo(valor: unknown): {
+  brand?: string;
+  last4?: string;
+  bank?: { reference?: string };
+} {
+  return typeof valor === 'object' && valor !== null ? valor : {};
+}
+
+function lineasDe(valor: unknown): LineaDeComprobante[] {
+  if (!Array.isArray(valor)) return [];
+
+  return valor.flatMap((crudo) => {
+    const l = crudo as Partial<LineaDeComprobante>;
+
+    return typeof l.label === 'string' && typeof l.amountCents === 'number'
+      ? [
+          {
+            label: l.label,
+            quantity: typeof l.quantity === 'number' ? l.quantity : 1,
+            unitPriceCents: typeof l.unitPriceCents === 'number' ? l.unitPriceCents : l.amountCents,
+            amountCents: l.amountCents,
+          },
+        ]
+      : [];
+  });
+}
+
+function etiquetaDeFee(valor: unknown): string | null {
+  const snapshot = valor as { label?: unknown } | null;
+
+  return typeof snapshot?.label === 'string' ? snapshot.label : null;
+}
+
+function datoPersonal(valor: unknown, clave: string): string {
+  const datos = valor as Record<string, unknown> | null;
+  const dato = datos?.[clave];
+
+  return typeof dato === 'string' && dato.trim() ? dato : '-';
+}

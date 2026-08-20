@@ -1,0 +1,66 @@
+# Servicio systemd de la API de PaceUp.
+#
+#   sudo cp deploy/running-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now running-api
+#
+# Los detalles estan en docs/despliegue.md.
+
+[Unit]
+Description=PaceUp API (NestJS)
+Documentation=https://github.com/alvaro-tc/running-api
+# Requires= no: si Postgres se cae y vuelve, systemd pararia la API con el.
+# After= solo ordena el arranque; caerse y reconectar es cosa del pool.
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paceup
+Group=paceup
+WorkingDirectory=/srv/running-api/current
+
+# Fuera del repo y con permisos 600: aqui viven JWT_SECRET, la contrasena de
+# Postgres y el secreto del webhook de pagos.
+EnvironmentFile=/etc/running-api/.env.production
+
+ExecStart=/usr/bin/node dist/src/main.js
+
+# La API cierra conexiones y sockets con los shutdown hooks de Nest. 30 s de
+# margen para que los lotes de posiciones en vuelo terminen de escribirse.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+Restart=always
+RestartSec=5
+# Si revienta 5 veces en 60 s no es un fallo transitorio, es configuracion rota:
+# reiniciar en bucle solo llena el journal y esconde el problema.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=running-api
+
+# ─── Endurecimiento ───────────────────────────────────────────────────────────
+# El proceso solo necesita leer su release y escribir en uploads/.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ReadWritePaths=/srv/running-api/uploads
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+# sharp y Prisma abren bastantes descriptores; el default de 1024 se queda corto
+# con varios cientos de conexiones simultaneas al mapa en vivo.
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

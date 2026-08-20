@@ -1,0 +1,60 @@
+# Caddy para la API de PaceUp.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo sed -i 's/api.paceup.example/TU-DOMINIO/' /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# El TLS es automatico: Caddy pide y renueva el certificado de Let's Encrypt
+# solo, siempre que el dominio apunte a este VPS y 80/443 esten abiertos. El 80
+# no se cierra "por seguridad": sin el no hay renovacion por HTTP-01.
+
+api.paceup.example {
+	encode zstd gzip
+
+	header {
+		# HSTS. Un ano y con preload: la API es solo HTTPS, no hay nada que
+		# servir en claro. Ojo, esto es dificil de revertir en los navegadores
+		# que ya lo cachearon; quitar `preload` si el dominio se va a reutilizar.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Delata la version del servidor y no aporta nada.
+		-Server
+	}
+
+	# Los archivos subidos los sirve Caddy desde disco: pasarlos por Node solo
+	# gasta event loop para leer un fichero. La ruta es la misma que expone la
+	# API (UPLOADS_DIR), asi que las URLs guardadas no cambian.
+	handle_path /uploads/* {
+		root * /srv/running-api/uploads
+		# Los nombres llevan UUID: el contenido de una URL nunca cambia.
+		header Cache-Control "public, max-age=2592000, immutable"
+		file_server {
+			hide .*
+		}
+	}
+
+	# Todo lo demas a Node, incluido el WebSocket de /live: Caddy propaga el
+	# upgrade sin configuracion extra.
+	handle {
+		reverse_proxy 127.0.0.1:3000 {
+			# El mapa en vivo mantiene la conexion abierta; sin esto Caddy la
+			# cortaria al minuto de silencio entre dos posiciones.
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /var/log/caddy/running-api.log {
+			roll_size 50MiB
+			roll_keep 7
+		}
+	}
+}
+
+# Los enlaces compartidos por WhatsApp se generan con PUBLIC_BASE_URL; si alguna
+# vez se sirvio la API en otro dominio, redirigir aqui en vez de dejarlos rotos.
+# viejo.paceup.example {
+# 	redir https://api.paceup.example{uri} permanent
+# }
