@@ -109,16 +109,21 @@ jobs:
               exit 1
             fi
 
-            # sudo se comprueba ANTES de npm ci: si el usuario no tiene
-            # NOPASSWD, el fallo salta en 2s y no tras 3 min de instalacion.
-            # `-n` en todos los sudo del script: sin TTY, un sudo normal
-            # intenta abrir un prompt y muere con un error opaco.
-            if ! sudo -n true 2>/dev/null; then
-              echo "▸ El usuario $(whoami) no puede ejecutar sudo sin contrasena."
-              echo "▸ Anade en el VPS /etc/sudoers.d/running-api-deploy (chmod 440):"
-              echo "▸   $(whoami) ALL=(root) NOPASSWD: /bin/systemctl restart running-api, /usr/bin/journalctl -u running-api *"
-              echo "▸ Ajusta las rutas a lo que devuelva 'which systemctl journalctl'."
-              exit 1
+            # Comprobacion temprana de sudo: si falta el permiso, el fallo salta
+            # en 2s en vez de tras 3 min de npm ci. Se pregunta por el comando
+            # EXACTO con `sudo -l`, no por `sudo -n true`: el sudoers de este
+            # despliegue lista comandos concretos, asi que `true` no esta
+            # permitido y probarlo daba un falso negativo que tumbaba el deploy
+            # aunque el restart si funcionase.
+            #
+            # Solo avisa. Un `sudo -l` que pida contrasena (hay politicas que lo
+            # hacen aunque el comando sea NOPASSWD) volveria a bloquear un
+            # despliegue sano; quien decide es el restart de verdad, mas abajo.
+            SUDO_LISTO=si
+            if ! sudo -n -l systemctl restart running-api >/dev/null 2>&1; then
+              SUDO_LISTO=no
+              echo "▸ Aviso: no se pudo confirmar sudo sin contrasena para reiniciar el servicio."
+              echo "▸ Se sigue igualmente; si el restart falla, el error de abajo lo explica."
             fi
 
             # dist/ se borra entero: un fichero .js huerfano de un rename viejo
@@ -158,7 +163,17 @@ jobs:
             npx prisma generate
             npx prisma migrate deploy
 
-            sudo -n systemctl restart running-api
+            # Aqui es donde el permiso de sudo se decide de verdad. Si falla, el
+            # mensaje trae la regla que falta: sin esto el error de sudo a secas
+            # ("a terminal is required") no dice que hacer.
+            if ! sudo -n systemctl restart running-api; then
+              echo "▸ No se pudo reiniciar running-api con sudo (comprobacion previa: $SUDO_LISTO)."
+              echo "▸ En el VPS, revisa /etc/sudoers.d/running-api-deploy (chmod 440, editar con visudo):"
+              echo "▸   $(whoami) ALL=(root) NOPASSWD: $(command -v systemctl) restart running-api, $(command -v journalctl) -u running-api *"
+              echo "▸ Las rutas de arriba son las reales de esta maquina: en sudoers deben"
+              echo "▸ coincidir exactamente o la regla NOPASSWD no aplica."
+              exit 1
+            fi
 
             # Espera activa en vez de `sleep 2`: el arranque de Nest tarda mas
             # cuando hay migraciones nuevas y el pool tiene que abrir conexiones.
@@ -171,5 +186,5 @@ jobs:
             done
 
             echo "▸ El health check no respondio en 20s. Ultimos logs:"
-            sudo -n journalctl -u running-api -n 50 --no-pager
+            sudo -n journalctl -u running-api -n 50 --no-pager || true
             exit 1
