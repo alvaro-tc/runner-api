@@ -22,11 +22,20 @@ import { RegistrationStatus } from '../../../generated/prisma/enums';
 import { AdminService } from './admin.service';
 import {
   ConfirmTransferDto,
+  CreateCategoryDto,
+  CreateExtraDto,
+  CreateMarathonDto,
+  CreateUserDto,
   FeePreviewDto,
   FeePreviewQueryDto,
   ImportResultsDto,
   ImportResultsResponseDto,
   ServiceFeeConfigDto,
+  SetPasswordDto,
+  UpdateCategoryDto,
+  UpdateExtraDto,
+  UpdateMarathonDto,
+  UpdateUserDto,
 } from './dto/admin.dto';
 
 /**
@@ -125,6 +134,100 @@ export class AdminController {
   })
   listarMaratones() {
     return this.admin.listarMaratones();
+  }
+
+  @Post('marathons')
+  @ApiOperation({
+    summary: 'Crear una maratón',
+    description:
+      'Nace **como borrador** salvo que se mande `published: true`: una carrera recién cargada ' +
+      'suele tener la fecha provisional, y publicarla sola la metería en el catálogo antes de ' +
+      'que nadie la revise. Sin `slug` se deriva del nombre y se desambigua con un sufijo.',
+  })
+  @ApiResponse({ status: 201, description: 'La maratón creada, con sus categorías y extras' })
+  crearMaraton(@Body() dto: CreateMarathonDto) {
+    return this.admin.crearMaraton(dto);
+  }
+
+  @Get('marathons/:id')
+  @ApiOperation({
+    summary: 'Detalle completo, con categorías y extras',
+    description: 'Es lo que rellena el formulario de edición. Trae borradores, como todo aquí.',
+  })
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'NOT_FOUND' })
+  verMaraton(@Param('id') id: string) {
+    return this.admin.detalleMaraton(id);
+  }
+
+  @Put('marathons/:id')
+  @ApiOperation({
+    summary: 'Editar una maratón',
+    description:
+      'Parcial: lo que no venga en el cuerpo no se toca. `null` sí vacía el campo, que es ' +
+      'distinto de no mandarlo.',
+  })
+  editarMaraton(@Param('id') id: string, @Body() dto: UpdateMarathonDto) {
+    return this.admin.actualizarMaraton(id, dto);
+  }
+
+  @Delete('marathons/:id')
+  @ApiOperation({
+    summary: 'Borrar una maratón sin inscritos',
+    description:
+      'Con inscripciones **se niega**: el borrado en cascada se llevaría pagos, dorsales y ' +
+      'resultados. Para una carrera vendida lo que corresponde es despublicarla.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT: tiene inscritos' })
+  borrarMaraton(@Param('id') id: string) {
+    return this.admin.borrarMaraton(id);
+  }
+
+  // ─── Categorías y extras ─────────────────────────────────────────────────
+
+  @Post('marathons/:id/categories')
+  @ApiOperation({ summary: 'Agregar una categoría a una maratón' })
+  crearCategoria(@Param('id') id: string, @Body() dto: CreateCategoryDto) {
+    return this.admin.crearCategoria(id, dto);
+  }
+
+  @Put('categories/:categoryId')
+  @ApiOperation({ summary: 'Editar una categoría' })
+  editarCategoria(@Param('categoryId') categoryId: string, @Body() dto: UpdateCategoryDto) {
+    return this.admin.actualizarCategoria(categoryId, dto);
+  }
+
+  @Delete('categories/:categoryId')
+  @ApiOperation({
+    summary: 'Borrar una categoría',
+    description:
+      'Las inscripciones que la usaban **no se borran**: se quedan sin categoría, con su dorsal ' +
+      'y su pago intactos. La respuesta dice cuántas quedaron así.',
+  })
+  borrarCategoria(@Param('categoryId') categoryId: string) {
+    return this.admin.borrarCategoria(categoryId);
+  }
+
+  @Post('marathons/:id/extras')
+  @ApiOperation({ summary: 'Agregar un adicional comprable' })
+  crearExtra(@Param('id') id: string, @Body() dto: CreateExtraDto) {
+    return this.admin.crearExtra(id, dto);
+  }
+
+  @Put('extras/:extraId')
+  @ApiOperation({ summary: 'Editar un adicional', description: '`stock: null` = sin límite' })
+  editarExtra(@Param('extraId') extraId: string, @Body() dto: UpdateExtraDto) {
+    return this.admin.actualizarExtra(extraId, dto);
+  }
+
+  @Delete('extras/:extraId')
+  @ApiOperation({
+    summary: 'Borrar un adicional',
+    description:
+      'Lo ya vendido no se pierde: vive copiado en el `quoteSnapshot` de cada inscripción. ' +
+      'Borrarlo solo significa que deja de poder comprarse.',
+  })
+  borrarExtra(@Param('extraId') extraId: string) {
+    return this.admin.borrarExtra(extraId);
   }
 
   @Post('marathons/:id/publish')
@@ -269,5 +372,59 @@ export class AdminController {
   })
   listarUsuarios(@Query('q') q?: string) {
     return this.admin.listarUsuarios(q);
+  }
+  @Post('users')
+  @ApiOperation({
+    summary: 'Crear una cuenta',
+    description:
+      'Es la **única** forma de crear un administrador: el registro público crea `runner` y ' +
+      'punto, porque un endpoint abierto que acepte `role` es un escalado de privilegios ' +
+      'esperando a que alguien lo pruebe. El email queda verificado salvo que se diga lo ' +
+      'contrario.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'EMAIL_ALREADY_REGISTERED' })
+  crearUsuario(@Body() dto: CreateUserDto) {
+    return this.admin.crearUsuario(dto);
+  }
+
+  @Put('users/:id')
+  @ApiOperation({
+    summary: 'Editar nombre, email, rol o verificación',
+    description:
+      'Un admin no puede quitarse a sí mismo el rol: sería dejar el panel sin nadie que pueda ' +
+      'entrar. Que lo haga otro admin.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT / email ocupado' })
+  editarUsuario(
+    @CurrentUser('sub') adminId: string,
+    @Param('id') id: string,
+    @Body() dto: UpdateUserDto,
+  ) {
+    return this.admin.actualizarUsuario(id, dto, adminId);
+  }
+
+  @Post('users/:id/password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Ponerle una contraseña nueva a alguien',
+    description:
+      '**Cierra todas sus sesiones.** Un reset que deja vivos los refresh tokens no sirve para ' +
+      'lo único que se usa de verdad: sacar a quien no debería estar dentro.',
+  })
+  cambiarPassword(@Param('id') id: string, @Body() dto: SetPasswordDto) {
+    return this.admin.cambiarPassword(id, dto.password);
+  }
+
+  @Delete('users/:id')
+  @ApiOperation({
+    summary: 'Borrar una cuenta',
+    description:
+      'Suelta los cupos de sus carreras futuras y borra sus archivos, igual que el borrado que ' +
+      'pide el propio usuario: es el mismo camino, no una segunda implementación. Un admin no ' +
+      'puede borrarse a sí mismo desde aquí.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT: es tu propia cuenta' })
+  borrarUsuario(@CurrentUser('sub') adminId: string, @Param('id') id: string) {
+    return this.admin.borrarUsuario(id, adminId);
   }
 }

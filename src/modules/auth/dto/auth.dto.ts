@@ -16,9 +16,13 @@ import { Transform } from 'class-transformer';
  * Longitud minima 8 y al menos una letra y un numero. No se exigen simbolos ni
  * mayusculas obligatorias: las reglas barrocas empujan a la gente a
  * `Password1!` y a reutilizarla, que es peor que una frase larga.
+ *
+ * Se exportan porque el panel de admin da de alta cuentas y resetea
+ * contrasenas: una segunda regla, aunque sea mas laxa por descuido, seria una
+ * puerta de atras a la politica de contrasenas de la app.
  */
-const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
-const PASSWORD_MESSAGE =
+export const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
+export const PASSWORD_MESSAGE =
   'La contrasena debe tener al menos 8 caracteres, con al menos una letra y un numero';
 
 /** Identifica el dispositivo. La app lo persiste y lo manda siempre. */

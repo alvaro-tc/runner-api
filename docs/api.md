@@ -616,9 +616,20 @@ PUT    /admin/marathons/:id/service-fee            ← override por maratón
 DELETE /admin/marathons/:id/service-fee            ← volver a la global
 
 GET    /admin/marathons                            ← incluye las no publicadas
+POST   /admin/marathons                            ← crear (nace como borrador)
+GET    /admin/marathons/:id                        ← detalle con categorías y extras
+PUT    /admin/marathons/:id                        ← editar (parcial)
+DELETE /admin/marathons/:id                        ← solo si no tiene inscritos
 POST   /admin/marathons/:id/publish | /unpublish
 POST   /admin/marathons/:id/close-registrations | /reopen-registrations
 GET    /admin/marathons/:id/registrants.csv
+
+POST   /admin/marathons/:id/categories             ← categorías
+PUT    /admin/categories/:categoryId
+DELETE /admin/categories/:categoryId
+POST   /admin/marathons/:id/extras                 ← adicionales
+PUT    /admin/extras/:extraId
+DELETE /admin/extras/:extraId
 
 GET    /admin/registrations?marathonId=&status=
 GET    /admin/payments/pending-transfers
@@ -628,6 +639,10 @@ POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal
 POST   /admin/marathons/:id/recalculate-ranks
 
 GET    /admin/users?q=
+POST   /admin/users                                ← única forma de crear un admin
+PUT    /admin/users/:id
+POST   /admin/users/:id/password                   ← cierra todas sus sesiones
+DELETE /admin/users/:id
 ```
 
 ### El cargo por servicio y su vista previa
@@ -644,6 +659,94 @@ gente.
 El override de una maratón manda **aunque venga apagado**: una carrera con una
 config `enabled: false` no cobra cargo, en vez de caer de vuelta a la global. Sin
 eso no habría forma de eximir a una sola carrera.
+
+### Alta, edición y baja de maratones
+
+```json
+POST /admin/marathons
+{ "name": "Maratón La Paz 3600", "startsAt": "2026-09-13T11:00:00.000Z", "city": "La Paz",
+  "distanceMeters": 42195, "capacity": 2000, "priceCents": 25000 }
+```
+
+Obligatorios los seis de arriba: sin fecha, cupo o precio no se puede ni listar
+ni cobrar. Lo demás —cronograma, portada, qué incluye— se completa después, que
+es como se trabaja: la carrera se carga en cuanto se confirma y el cronograma
+llega semanas más tarde.
+
+Nace **como borrador** salvo que se mande `published: true`. Publicarla sola la
+metería en el catálogo antes de que nadie la revise, y despublicar después de que
+la vio medio país no deshace nada.
+
+Sin `slug` se deriva del nombre (sin acentos, en minúsculas, con guiones) y se
+desambigua con `-2`, `-3`… en vez de fallar: quien carga la tercera edición de una
+carrera escribe el mismo nombre a propósito.
+
+`PUT /admin/marathons/:id` es **parcial**: lo que no venga no se toca, y `null`
+sí vacía el campo. Son cosas distintas y por eso no se puede mandar el objeto
+entero con huecos.
+
+`DELETE /admin/marathons/:id` **se niega con inscritos** (`CONFLICT`): el borrado
+en cascada se llevaría pagos, dorsales y resultados. Para una carrera vendida lo
+que corresponde es despublicarla.
+
+`capacity` puede bajarse por debajo de los cupos ya vendidos y no se impide: a
+veces el municipio recorta el cupo después de vender. Lo que no pasa es que eso
+cancele inscripciones — la carrera queda sobrevendida y a la vista en
+`slotsTaken / capacity`.
+
+### Categorías y adicionales
+
+```
+POST   /admin/marathons/:id/categories
+PUT    /admin/categories/:categoryId
+DELETE /admin/categories/:categoryId
+
+POST   /admin/marathons/:id/extras
+PUT    /admin/extras/:extraId
+DELETE /admin/extras/:extraId
+```
+
+Borrar una categoría **no borra inscripciones**: la relación es
+`onDelete: SetNull`, así que se quedan sin categoría pero con su dorsal y su pago
+intactos. La respuesta dice cuántas quedaron así, porque es algo que el
+organizador va a querer arreglar antes de imprimir resultados.
+
+Borrar un adicional tampoco pierde lo vendido: los extras de una inscripción
+viven copiados en su `quoteSnapshot`, no como referencia a la fila. Borrarlo solo
+significa que deja de poder comprarse. `stock: null` es sin límite, no agotado.
+
+### Alta, edición y baja de usuarios
+
+```
+POST   /admin/users            ← { email, name, password, role?, verified? }
+PUT    /admin/users/:id        ← email, name, role, verified (parcial)
+POST   /admin/users/:id/password
+DELETE /admin/users/:id
+```
+
+`POST /admin/users` es la **única** forma de crear un administrador: el registro
+público crea `runner` y punto, porque un endpoint abierto que acepte `role` es un
+escalado de privilegios esperando a que alguien lo pruebe. La contraseña pasa por
+la misma política y el mismo hash (argon2id, 64 MiB) que el registro normal: dos
+juegos de parámetros darían cuentas con seguridad distinta según por dónde
+entraron.
+
+El email queda **verificado** salvo que se mande `verified: false`: una cuenta
+creada a mano ya pasó por una persona, y dejarla sin verificar la deja a medio
+camino sin que nadie le haya mandado el correo.
+
+Un admin no puede quitarse a sí mismo el rol ni borrarse desde el panel
+(`CONFLICT` en ambos): lo primero dejaría el panel sin nadie que pueda entrar y
+solo se arregla tocando la base a mano.
+
+`POST /admin/users/:id/password` **cierra todas sus sesiones**. Un reset que deja
+vivos los refresh tokens no sirve para lo único que se usa de verdad —sacar a
+quien no debería estar dentro—, porque el intruso sigue renovando su token sin
+saber la contraseña nueva. Devuelve `sessionsRevoked`.
+
+`DELETE /admin/users/:id` es el **mismo camino** que el borrado que pide el propio
+usuario: suelta los cupos de sus carreras futuras y borra sus archivos. Un
+`DELETE` directo dejaría plazas ocupadas por alguien que ya no existe.
 
 ### Publicar y cerrar
 
@@ -698,6 +801,12 @@ debe ejecutar nada al abrirse, y el vector es un campo que rellena el usuario.
 credenciales, saca un token por `/auth/login` y a partir de ahí todo pasa por los
 endpoints de arriba. Vive fuera del prefijo versionado porque es una página, no
 un endpoint.
+
+Tiene el CRUD completo: crear y editar maratones con sus categorías y sus
+adicionales, y dar de alta, editar, resetear la contraseña o borrar usuarios.
+Todo eso son llamadas a los endpoints de esta sección — la página no sabe una
+sola regla que la API no sepa, que es lo que permite cambiarla por un front-end
+web sin reimplementar nada.
 
 ---
 

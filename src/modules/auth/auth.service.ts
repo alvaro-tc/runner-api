@@ -6,26 +6,12 @@ import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { MailService } from '../mail/mail.service';
+import { hashPassword } from './password';
 import { DeviceInfo, TokenService } from './token.service';
 import type { ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto } from './dto/auth.dto';
 
-/**
- * Parametros de argon2id.
- *
- * 64 MiB y 3 pasadas es la recomendacion de OWASP: caro para un atacante con
- * GPUs, imperceptible en un login (~100 ms). Aqui SI vale el coste, al reves
- * que en los refresh tokens, porque una contrasena humana si es atacable por
- * diccionario.
- */
-const ARGON2_OPTS: argon2.HashOptions = {
-  type: argon2.argon2id,
-  memoryCost: 65536,
-  timeCost: 3,
-  parallelism: 4,
-};
-
 /** Hash de una contrasena ficticia, para gastar tiempo cuando el email no existe. */
-const DUMMY_HASH_PROMISE = argon2.hash('contrasena-que-nunca-nadie-usa', ARGON2_OPTS);
+const DUMMY_HASH_PROMISE = hashPassword('contrasena-que-nunca-nadie-usa');
 
 export interface UserPublic {
   id: string;
@@ -64,7 +50,7 @@ export class AuthService {
       );
     }
 
-    const passwordHash = await argon2.hash(dto.password, ARGON2_OPTS);
+    const passwordHash = await hashPassword(dto.password);
 
     // Perfil y preferencias nacen con el usuario: asi ningun endpoint tiene que
     // preguntarse si existen, y `onboardingSeenAt` empieza en null de verdad.
@@ -259,7 +245,7 @@ export class AuthService {
       );
     }
 
-    const passwordHash = await argon2.hash(dto.password, ARGON2_OPTS);
+    const passwordHash = await hashPassword(dto.password);
 
     await this.prisma.$transaction([
       this.prisma.user.update({ where: { id: registro.userId }, data: { passwordHash } }),

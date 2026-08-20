@@ -2,6 +2,9 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
+import { camposPresentes } from '../../common/utils/patch';
+import { hashPassword } from '../auth/password';
+import { UsersService } from '../users/users.service';
 import { calcularServiceFee } from '../pricing/service-fee';
 import { ServiceFeeConfigService } from '../pricing/service-fee.service';
 import { resolverEstado } from '../marathons/registration-status';
@@ -12,12 +15,88 @@ import {
   PaymentStatus,
   RegistrationStatus,
   ServiceFeeScope,
+  UserRole,
 } from '../../../generated/prisma/enums';
+import { Prisma } from '../../../generated/prisma/client';
 import { aCsv } from './csv';
-import type { ImportResultsDto, ServiceFeeConfigDto } from './dto/admin.dto';
+import type {
+  CategoryFieldsDto,
+  CreateCategoryDto,
+  CreateExtraDto,
+  CreateMarathonDto,
+  CreateUserDto,
+  ExtraFieldsDto,
+  ImportResultsDto,
+  MarathonFieldsDto,
+  ServiceFeeConfigDto,
+  UpdateCategoryDto,
+  UpdateExtraDto,
+  UpdateMarathonDto,
+  UpdateUserDto,
+} from './dto/admin.dto';
 
 /** Subtotal de ejemplo de la vista previa cuando el admin no da uno. */
 const SUBTOTAL_DE_EJEMPLO = 20_000;
+
+/**
+ * Las columnas de usuario que el panel puede ver.
+ *
+ * Es una lista blanca y no un `omit` a proposito: con `omit`, una columna nueva
+ * —un token, una ubicacion— aparece sola en la respuesta el dia que alguien la
+ * agregue al esquema. Aqui hay que sumarla a mano, que es justo la friccion que
+ * uno quiere delante de los datos personales.
+ */
+const SELECCION_USUARIO = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  emailVerifiedAt: true,
+  createdAt: true,
+  _count: { select: { registrations: true, workouts: true } },
+} as const;
+
+type UsuarioSeleccionado = {
+  id: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  emailVerifiedAt: Date | null;
+  createdAt: Date;
+  _count: { registrations: number; workouts: number };
+};
+
+/** Listar, crear y editar devuelven la misma forma, para que el panel repinte igual. */
+function aUsuarioPublico(u: UsuarioSeleccionado) {
+  return {
+    id: u.id,
+    email: u.email,
+    name: u.name,
+    role: u.role,
+    verified: u.emailVerifiedAt !== null,
+    createdAt: u.createdAt.toISOString(),
+    registrations: u._count.registrations,
+    workouts: u._count.workouts,
+  };
+}
+
+/**
+ * Nombre a slug: sin acentos, en minusculas y con guiones.
+ *
+ * La normalizacion NFD separa la letra de su tilde y el rango de combinantes la
+ * borra, asi que "Maraton La Paz 3600" y "Maratón La Paz 3600" dan el mismo
+ * slug. Lo que no hace es garantizar unicidad: de eso se encarga `slugLibre`.
+ */
+function aSlug(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 140)
+    .replace(/-+$/g, '');
+}
 
 /**
  * Operaciones de administracion.
@@ -41,6 +120,7 @@ export class AdminService {
     private readonly fees: ServiceFeeConfigService,
     private readonly payments: PaymentsService,
     private readonly races: RacesService,
+    private readonly users: UsersService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -464,32 +544,516 @@ export class AdminService {
         : {},
       orderBy: { createdAt: 'desc' },
       take: 100,
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        emailVerifiedAt: true,
-        createdAt: true,
-        _count: { select: { registrations: true, workouts: true } },
+      select: SELECCION_USUARIO,
+    });
+
+    return usuarios.map(aUsuarioPublico);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Alta, edicion y baja de maratones
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Crea una maraton.
+   *
+   * Nace **como borrador** salvo que se pida lo contrario: una carrera recien
+   * cargada suele tener la fecha provisional y el precio a medias, y publicarla
+   * por defecto la pondria en el catalogo —y en las notificaciones— antes de
+   * que nadie la haya revisado. Publicar es un clic mas; despublicar despues de
+   * que la vio medio pais, no.
+   *
+   * El slug se deriva del nombre si no lo mandan, y se desambigua con un sufijo
+   * en vez de fallar: quien esta cargando la tercera edicion de una carrera no
+   * tiene por que saber que el slug ya existe.
+   */
+  async crearMaraton(dto: CreateMarathonDto) {
+    const slug = await this.slugLibre(dto.slug ?? aSlug(dto.name));
+
+    const maraton = await this.prisma.marathon.create({
+      data: {
+        ...this.datosDeMaraton(dto),
+        // Prisma exige los obligatorios explicitos: `datosDeMaraton` los
+        // devuelve opcionales porque la misma funcion sirve para editar.
+        name: dto.name,
+        slug,
+        startsAt: new Date(dto.startsAt),
+        city: dto.city,
+        distanceMeters: dto.distanceMeters,
+        capacity: dto.capacity,
+        priceCents: dto.priceCents,
+        publishedAt: dto.published ? new Date() : null,
       },
     });
 
-    return usuarios.map((u) => ({
-      id: u.id,
-      email: u.email,
-      name: u.name,
-      role: u.role,
-      verified: u.emailVerifiedAt !== null,
-      createdAt: u.createdAt.toISOString(),
-      registrations: u._count.registrations,
-      workouts: u._count.workouts,
-    }));
+    this.logger.log(`Maraton ${maraton.slug} creada (${dto.published ? 'publicada' : 'borrador'})`);
+
+    return this.detalleMaraton(maraton.id);
+  }
+
+  /**
+   * Edita una maraton. Lo que no venga en el cuerpo no se toca.
+   *
+   * `capacity` puede bajarse por debajo de los cupos ya vendidos y **no se
+   * impide**: a veces el municipio recorta el cupo despues de vender. Lo que no
+   * pasa es que eso cancele inscripciones; la carrera queda sobrevendida y a la
+   * vista en el listado (`slotsTaken / capacity`), que es informacion que el
+   * organizador necesita, no un error que ocultarle.
+   */
+  async actualizarMaraton(marathonId: string, dto: UpdateMarathonDto) {
+    const actual = await this.buscarMaraton(marathonId);
+
+    const slug =
+      dto.slug !== undefined && dto.slug !== actual.slug
+        ? await this.slugLibre(dto.slug, marathonId)
+        : undefined;
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: {
+        ...this.datosDeMaraton(dto),
+        ...(slug ? { slug } : {}),
+        // `published` es un booleano de cara al panel y una fecha en la base.
+        // Republicar algo ya publicado no debe mover la fecha: es la que dice
+        // desde cuando esta en el catalogo.
+        ...(dto.published === undefined
+          ? {}
+          : { publishedAt: dto.published ? (actual.publishedAt ?? new Date()) : null }),
+      },
+    });
+
+    return this.detalleMaraton(marathonId);
+  }
+
+  /**
+   * Borra una maraton, y **solo** si nadie se inscribio.
+   *
+   * El esquema borra las inscripciones en cascada, asi que un DELETE sobre una
+   * carrera vendida se llevaria por delante pagos, dorsales y resultados sin
+   * preguntar. Con inscritos la accion correcta es despublicar —la carrera
+   * desaparece del catalogo y sus inscritos siguen viendo la suya— y por eso el
+   * mensaje del error lo dice en vez de limitarse a negarse.
+   */
+  async borrarMaraton(marathonId: string) {
+    const maraton = await this.buscarMaraton(marathonId);
+
+    const inscritos = await this.prisma.registration.count({ where: { marathonId } });
+    if (inscritos > 0) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        `No se puede borrar: ${inscritos} inscripcion/es dependen de esta maraton. ` +
+          'Despublicala para sacarla del catalogo sin perder nada.',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    await this.prisma.marathon.delete({ where: { id: marathonId } });
+    this.logger.warn(`Maraton ${maraton.slug} borrada`);
+
+    return { deleted: true, slug: maraton.slug };
+  }
+
+  /** Una maraton con sus categorias y extras: lo que pinta el formulario de edicion. */
+  async detalleMaraton(marathonId: string) {
+    const maraton = await this.prisma.marathon.findUnique({
+      where: { id: marathonId },
+      include: {
+        categories: { orderBy: { name: 'asc' } },
+        extras: { orderBy: { name: 'asc' } },
+        serviceFeeConfig: { select: { id: true, enabled: true, label: true } },
+        _count: { select: { registrations: true } },
+      },
+    });
+
+    if (!maraton) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'La maraton no existe', HttpStatus.NOT_FOUND);
+    }
+
+    return {
+      id: maraton.id,
+      slug: maraton.slug,
+      name: maraton.name,
+      description: maraton.description,
+      startsAt: maraton.startsAt.toISOString(),
+      timezone: maraton.timezone,
+      city: maraton.city,
+      country: maraton.country,
+      lat: maraton.lat,
+      lng: maraton.lng,
+      distanceMeters: maraton.distanceMeters,
+      capacity: maraton.capacity,
+      slotsTaken: maraton.slotsTaken,
+      priceCents: maraton.priceCents,
+      currency: maraton.currency,
+      registrationStatus: maraton.registrationStatus,
+      resolved: resolverEstado(maraton),
+      registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
+      coverUrl: maraton.coverUrl,
+      schedule: maraton.schedule,
+      includes: maraton.includes,
+      kitPickup: maraton.kitPickup,
+      routeGeoJson: maraton.routeGeoJson,
+      published: maraton.publishedAt !== null,
+      publishedAt: maraton.publishedAt?.toISOString() ?? null,
+      registrations: maraton._count.registrations,
+      feeOverride: maraton.serviceFeeConfig,
+      categories: maraton.categories,
+      extras: maraton.extras,
+    };
+  }
+
+  // ─── Categorias ──────────────────────────────────────────────────────────
+
+  async crearCategoria(marathonId: string, dto: CreateCategoryDto) {
+    await this.buscarMaraton(marathonId);
+
+    return this.prisma.marathonCategory.create({
+      data: { marathonId, ...this.datosDeCategoria(dto), name: dto.name },
+    });
+  }
+
+  async actualizarCategoria(categoryId: string, dto: UpdateCategoryDto) {
+    await this.buscarCategoria(categoryId);
+
+    return this.prisma.marathonCategory.update({
+      where: { id: categoryId },
+      data: this.datosDeCategoria(dto),
+    });
+  }
+
+  /**
+   * Borra una categoria.
+   *
+   * Las inscripciones que la usaban **no se borran**: la relacion es
+   * `onDelete: SetNull`, asi que se quedan sin categoria pero con su dorsal y su
+   * pago intactos. Aun asi se avisa de cuantas quedaron sueltas, porque es algo
+   * que el organizador va a querer arreglar antes de imprimir resultados.
+   */
+  async borrarCategoria(categoryId: string) {
+    const categoria = await this.buscarCategoria(categoryId);
+    const afectadas = await this.prisma.registration.count({ where: { categoryId } });
+
+    await this.prisma.marathonCategory.delete({ where: { id: categoryId } });
+
+    return { deleted: true, name: categoria.name, registrationsWithoutCategory: afectadas };
+  }
+
+  // ─── Extras ──────────────────────────────────────────────────────────────
+
+  async crearExtra(marathonId: string, dto: CreateExtraDto) {
+    await this.buscarMaraton(marathonId);
+
+    return this.prisma.marathonExtra.create({
+      data: {
+        marathonId,
+        ...this.datosDeExtra(dto),
+        name: dto.name,
+        priceCents: dto.priceCents,
+      },
+    });
+  }
+
+  async actualizarExtra(extraId: string, dto: UpdateExtraDto) {
+    await this.buscarExtra(extraId);
+
+    return this.prisma.marathonExtra.update({
+      where: { id: extraId },
+      data: this.datosDeExtra(dto),
+    });
+  }
+
+  /**
+   * Borra un extra.
+   *
+   * Lo ya vendido no se pierde: los extras de una inscripcion viven copiados en
+   * su `quoteSnapshot`, no como una referencia a esta fila. Borrarlo solo
+   * significa que deja de poder comprarse.
+   */
+  async borrarExtra(extraId: string) {
+    const extra = await this.buscarExtra(extraId);
+    await this.prisma.marathonExtra.delete({ where: { id: extraId } });
+
+    return { deleted: true, name: extra.name };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Alta, edicion y baja de usuarios
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Da de alta una cuenta desde el panel.
+   *
+   * Es la unica forma de crear un administrador: el registro publico crea
+   * `runner` y punto, porque un endpoint abierto que acepte `role` es un
+   * escalado de privilegios esperando a que alguien lo pruebe.
+   *
+   * El hash usa **los mismos parametros** que el registro normal
+   * (`hashPassword`), no una copia local: dos juegos de parametros distintos
+   * darian cuentas con seguridad distinta segun por donde entraron.
+   */
+  async crearUsuario(dto: CreateUserDto) {
+    const existente = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+
+    if (existente) {
+      throw new AppException(
+        ErrorCode.EMAIL_ALREADY_REGISTERED,
+        'Ya existe una cuenta con ese email',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const usuario = await this.prisma.user.create({
+      data: {
+        email: dto.email,
+        name: dto.name,
+        passwordHash: await hashPassword(dto.password),
+        role: dto.role ?? UserRole.runner,
+        // Igual que en el registro: perfil y preferencias nacen con el usuario,
+        // asi ningun endpoint tiene que preguntarse si existen.
+        emailVerifiedAt: dto.verified === false ? null : new Date(),
+        profile: { create: {} },
+        preferences: { create: {} },
+      },
+    });
+
+    this.logger.log(`Usuario ${usuario.email} creado con rol ${usuario.role}`);
+
+    return this.usuarioPublico(usuario.id);
+  }
+
+  /**
+   * Edita nombre, email, rol o verificacion.
+   *
+   * Un admin **no puede quitarse a si mismo el rol**: seria dejar el panel sin
+   * nadie que pueda entrar, y recuperarlo requiere tocar la base a mano. Que lo
+   * haga otro admin, que es la comprobacion que ya existe de verdad.
+   */
+  async actualizarUsuario(userId: string, dto: UpdateUserDto, adminUserId: string) {
+    const actual = await this.buscarUsuario(userId);
+
+    if (dto.role && dto.role !== UserRole.admin && userId === adminUserId) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        'No puedes quitarte a ti mismo el rol de administrador',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (dto.email && dto.email.toLowerCase() !== actual.email.toLowerCase()) {
+      const ocupado = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+        select: { id: true },
+      });
+
+      if (ocupado) {
+        throw new AppException(
+          ErrorCode.EMAIL_ALREADY_REGISTERED,
+          'Ya existe una cuenta con ese email',
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...camposPresentes(dto, ['email', 'name', 'role']),
+        ...(dto.verified === undefined
+          ? {}
+          : // Verificar dos veces no debe mover la fecha: dice cuando se
+            // verifico, no cuando se guardo el formulario por ultima vez.
+            { emailVerifiedAt: dto.verified ? (actual.emailVerifiedAt ?? new Date()) : null }),
+      },
+    });
+
+    return this.usuarioPublico(userId);
+  }
+
+  /**
+   * Le pone una contrasena nueva a alguien.
+   *
+   * **Cierra todas sus sesiones.** Un reset que deja vivos los refresh tokens no
+   * sirve para lo unico que se usa de verdad —sacar a quien no deberia estar
+   * dentro—, porque el intruso sigue renovando su token sin saber la contrasena
+   * nueva.
+   */
+  async cambiarPassword(userId: string, password: string) {
+    const usuario = await this.buscarUsuario(userId);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: await hashPassword(password) },
+    });
+
+    const { count } = await this.prisma.authSession.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    this.logger.warn(`Contrasena de ${usuario.email} cambiada por un admin (${count} sesion/es cerradas)`);
+
+    return { ok: true, sessionsRevoked: count };
+  }
+
+  /**
+   * Borra una cuenta.
+   *
+   * No reimplementa el borrado: llama a `UsersService.borrarCuenta`, que es
+   * quien sabe soltar los cupos de las carreras futuras y limpiar los archivos
+   * de disco. Un `DELETE` directo aqui dejaria plazas ocupadas por alguien que
+   * ya no existe y avatares huerfanos.
+   *
+   * Un admin no puede borrarse a si mismo desde el panel: para eso esta el
+   * borrado de cuenta propio, que pide confirmacion del dueno.
+   */
+  async borrarUsuario(userId: string, adminUserId: string) {
+    if (userId === adminUserId) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        'No puedes borrar tu propia cuenta desde el panel',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const usuario = await this.buscarUsuario(userId);
+    await this.users.borrarCuenta(userId);
+
+    this.logger.warn(`Cuenta ${usuario.email} borrada desde el panel por ${adminUserId}`);
+
+    return { deleted: true, email: usuario.email };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
   //  Internos
   // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Los campos editables de una maraton, listos para Prisma.
+   *
+   * Va por `camposPresentes` y no por `{ ...dto }` porque en una edicion parcial
+   * "ausente" y "vaciar" no son lo mismo: `description: undefined` tiene que
+   * dejar la descripcion como estaba, y `description: null` borrarla. Copiar el
+   * dto entero mete las claves ausentes como `undefined` y hace imposible
+   * distinguirlas.
+   */
+  private datosDeMaraton(dto: MarathonFieldsDto): Partial<Prisma.MarathonUncheckedCreateInput> {
+    const datos: Partial<Prisma.MarathonUncheckedCreateInput> = camposPresentes(dto, [
+      'name',
+      'description',
+      'timezone',
+      'city',
+      'country',
+      'lat',
+      'lng',
+      'distanceMeters',
+      'capacity',
+      'priceCents',
+      'currency',
+      'registrationStatus',
+      'coverUrl',
+    ]);
+
+    if (dto.startsAt !== undefined) datos.startsAt = new Date(dto.startsAt);
+    if (dto.registrationClosesAt !== undefined) {
+      datos.registrationClosesAt = dto.registrationClosesAt
+        ? new Date(dto.registrationClosesAt)
+        : null;
+    }
+
+    // Las columnas jsonb no aceptan `null` a secas: en Prisma eso significa "no
+    // toques el campo". `DbNull` es el NULL de la base de verdad.
+    if (dto.schedule !== undefined) datos.schedule = dto.schedule as Prisma.InputJsonValue;
+    if (dto.includes !== undefined) datos.includes = dto.includes as Prisma.InputJsonValue;
+    if (dto.kitPickup !== undefined) {
+      datos.kitPickup = dto.kitPickup === null ? Prisma.DbNull : (dto.kitPickup as Prisma.InputJsonValue);
+    }
+    if (dto.routeGeoJson !== undefined) {
+      datos.routeGeoJson =
+        dto.routeGeoJson === null ? Prisma.DbNull : (dto.routeGeoJson as Prisma.InputJsonValue);
+    }
+
+    return datos;
+  }
+
+  private datosDeCategoria(dto: CategoryFieldsDto) {
+    return camposPresentes(dto, ['name', 'minAge', 'maxAge', 'gender', 'extraPriceCents']);
+  }
+
+  private datosDeExtra(dto: ExtraFieldsDto) {
+    return camposPresentes(dto, ['name', 'priceCents', 'stock']);
+  }
+
+  /**
+   * Un slug que no choque con otra maraton.
+   *
+   * Desambigua con `-2`, `-3`… en vez de rechazar el alta: quien carga la
+   * tercera edicion de una carrera escribe el mismo nombre a proposito, y
+   * pedirle que invente un identificador unico es pedirle que resuelva un
+   * problema nuestro.
+   */
+  private async slugLibre(base: string, excluyendoId?: string): Promise<string> {
+    const raiz = base || 'maraton';
+
+    for (let intento = 1; ; intento += 1) {
+      const candidato = intento === 1 ? raiz : `${raiz}-${intento}`;
+      const chocando = await this.prisma.marathon.findUnique({
+        where: { slug: candidato },
+        select: { id: true },
+      });
+
+      if (!chocando || chocando.id === excluyendoId) return candidato;
+    }
+  }
+
+  private async buscarCategoria(categoryId: string) {
+    const categoria = await this.prisma.marathonCategory.findUnique({ where: { id: categoryId } });
+
+    if (!categoria) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'La categoria no existe', HttpStatus.NOT_FOUND);
+    }
+
+    return categoria;
+  }
+
+  private async buscarExtra(extraId: string) {
+    const extra = await this.prisma.marathonExtra.findUnique({ where: { id: extraId } });
+
+    if (!extra) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'El adicional no existe', HttpStatus.NOT_FOUND);
+    }
+
+    return extra;
+  }
+
+  private async buscarUsuario(userId: string) {
+    const usuario = await this.prisma.user.findUnique({ where: { id: userId } });
+
+    if (!usuario || usuario.deletedAt) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'El usuario no existe', HttpStatus.NOT_FOUND);
+    }
+
+    return usuario;
+  }
+
+  /**
+   * Un usuario con la misma forma que los del listado.
+   *
+   * Que crear, editar y listar devuelvan lo mismo es lo que permite al panel
+   * repintar una fila sin recargar la tabla entera, y lo que evita que el hash
+   * de la contrasena se cuele en una respuesta por no haber elegido las
+   * columnas a mano en tres sitios distintos.
+   */
+  private async usuarioPublico(userId: string) {
+    const usuario = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: SELECCION_USUARIO,
+    });
+
+    return aUsuarioPublico(usuario);
+  }
 
   private async buscarMaraton(marathonId: string) {
     const maraton = await this.prisma.marathon.findUnique({ where: { id: marathonId } });

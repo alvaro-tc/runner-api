@@ -1,18 +1,40 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsArray,
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsISO8601,
   IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsObject,
   IsOptional,
   IsString,
+  Matches,
+  Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
-import { ServiceFeeType } from '../../../../generated/prisma/enums';
+import {
+  Gender,
+  MarathonRegistrationStatus,
+  ServiceFeeType,
+  UserRole,
+} from '../../../../generated/prisma/enums';
+import { PASSWORD_MESSAGE, PASSWORD_REGEX } from '../../auth/dto/auth.dto';
+
+/**
+ * Slug de maraton: minusculas, numeros y guiones.
+ *
+ * Es parte de la URL publica y de los enlaces que ya se compartieron, asi que
+ * no puede admitir espacios, acentos ni mayusculas: un slug que cambia de forma
+ * segun quien lo escriba rompe enlaces que ya estan en WhatsApp.
+ */
+const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 // ─── Cargo por servicio ────────────────────────────────────────────────────
 
@@ -166,4 +188,369 @@ export class AdminActionResultDto {
 
   @ApiProperty({ description: 'Qué quedó, para que el panel repinte sin recargar' })
   data!: unknown;
+}
+
+// ─── Alta y edición de maratones ───────────────────────────────────────────
+
+/**
+ * Los campos de una maraton, todos opcionales.
+ *
+ * El alta y la edicion comparten esta clase y se diferencian solo en lo que
+ * exigen (`CreateMarathonDto` redeclara lo obligatorio): tener dos listas de
+ * campos separadas garantiza que al agregar uno nuevo se olvide en una de las
+ * dos, y entonces el panel puede crear algo que despues no puede editar.
+ *
+ * Todo lo que es dinero va en centavos y todo lo que es distancia en metros,
+ * igual que en el resto de la API: se convierte en la frontera, no en el medio.
+ */
+export class MarathonFieldsDto {
+  @ApiPropertyOptional({ example: 'Maratón La Paz 3600' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(140)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  name?: string;
+
+  @ApiPropertyOptional({
+    example: 'maraton-la-paz-3600',
+    description: 'Único y estable: es parte de la URL pública. Sin él se deriva del nombre.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(SLUG_REGEX, { message: 'El slug solo admite minúsculas, números y guiones' })
+  @MaxLength(140)
+  slug?: string;
+
+  @ApiPropertyOptional({ nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(4000)
+  description?: string | null;
+
+  @ApiPropertyOptional({ example: '2026-09-13T11:00:00.000Z', description: 'Largada, en UTC' })
+  @IsOptional()
+  @IsISO8601()
+  startsAt?: string;
+
+  @ApiPropertyOptional({ example: 'America/La_Paz', description: 'Zona IANA de la carrera' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  timezone?: string;
+
+  @ApiPropertyOptional({ example: 'La Paz' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  city?: string;
+
+  @ApiPropertyOptional({ example: 'BO', description: 'ISO-3166 alfa-2' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2)
+  country?: string;
+
+  @ApiPropertyOptional({ nullable: true, example: -16.5 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  lat?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, example: -68.15 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  lng?: number | null;
+
+  @ApiPropertyOptional({ example: 42195, description: 'Metros' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  distanceMeters?: number;
+
+  @ApiPropertyOptional({ example: 2000, description: 'Cupos totales' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  capacity?: number;
+
+  @ApiPropertyOptional({ example: 25000, description: 'Precio base, en centavos' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  priceCents?: number;
+
+  @ApiPropertyOptional({ example: 'BOB' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(3)
+  currency?: string;
+
+  @ApiPropertyOptional({
+    enum: MarathonRegistrationStatus,
+    description:
+      'La **intención** del admin. Solo manda cuando dice `closed`; lo demás se deriva de ' +
+      'cupos y fechas al leer.',
+  })
+  @IsOptional()
+  @IsEnum(MarathonRegistrationStatus)
+  registrationStatus?: MarathonRegistrationStatus;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description: 'Null = las inscripciones cierran al largar',
+  })
+  @IsOptional()
+  @IsISO8601()
+  registrationClosesAt?: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: '/uploads/maratones/lapaz.jpg' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  coverUrl?: string | null;
+
+  @ApiPropertyOptional({ example: [{ time: '06:00', title: 'Acreditación' }] })
+  @IsOptional()
+  @IsArray()
+  schedule?: unknown[];
+
+  @ApiPropertyOptional({ example: ['remera', 'medalla', 'hidratación'] })
+  @IsOptional()
+  @IsArray()
+  includes?: unknown[];
+
+  @ApiPropertyOptional({ nullable: true, example: { address: 'Av. Arce 123' } })
+  @IsOptional()
+  @IsObject()
+  kitPickup?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Recorrido en GeoJSON' })
+  @IsOptional()
+  @IsObject()
+  routeGeoJson?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    description:
+      'Publicar o retirar del catálogo. Retirar **no cancela nada**: las inscripciones ' +
+      'vendidas siguen existiendo.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  published?: boolean;
+}
+
+/**
+ * Alta de una maraton.
+ *
+ * Redeclara como obligatorio lo minimo con lo que una carrera puede existir sin
+ * mentirle a nadie: sin fecha, cupo o precio no se la puede ni listar ni cobrar.
+ * El resto se completa despues, que es como se trabaja de verdad: la carrera se
+ * carga en cuanto se confirma y el cronograma llega semanas mas tarde.
+ */
+export class CreateMarathonDto extends MarathonFieldsDto {
+  @ApiProperty({ example: 'Maratón La Paz 3600' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(140)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  declare name: string;
+
+  @ApiProperty({ example: '2026-09-13T11:00:00.000Z' })
+  @IsISO8601()
+  declare startsAt: string;
+
+  @ApiProperty({ example: 'La Paz' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  declare city: string;
+
+  @ApiProperty({ example: 42195, description: 'Metros' })
+  @IsInt()
+  @Min(1)
+  declare distanceMeters: number;
+
+  @ApiProperty({ example: 2000 })
+  @IsInt()
+  @Min(1)
+  declare capacity: number;
+
+  @ApiProperty({ example: 25000, description: 'Centavos' })
+  @IsInt()
+  @Min(0)
+  declare priceCents: number;
+}
+
+/** Edicion parcial: lo que no venga en el cuerpo no se toca. */
+export class UpdateMarathonDto extends MarathonFieldsDto {}
+
+// ─── Categorías y extras ───────────────────────────────────────────────────
+
+export class CategoryFieldsDto {
+  @ApiPropertyOptional({ example: 'Elite masculino' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name?: string;
+
+  @ApiPropertyOptional({ nullable: true, example: 18 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(120)
+  minAge?: number | null;
+
+  @ApiPropertyOptional({ nullable: true, example: 39 })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(120)
+  maxAge?: number | null;
+
+  @ApiPropertyOptional({ enum: Gender, nullable: true, description: 'Null = cualquier género' })
+  @IsOptional()
+  @IsEnum(Gender)
+  gender?: Gender | null;
+
+  @ApiPropertyOptional({ example: 0, description: 'Recargo sobre el precio base, en centavos' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  extraPriceCents?: number;
+}
+
+export class CreateCategoryDto extends CategoryFieldsDto {
+  @ApiProperty({ example: 'Elite masculino' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  declare name: string;
+}
+
+export class UpdateCategoryDto extends CategoryFieldsDto {}
+
+export class ExtraFieldsDto {
+  @ApiPropertyOptional({ example: 'Remera técnica' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  name?: string;
+
+  @ApiPropertyOptional({ example: 12000, description: 'Centavos' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  priceCents?: number;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Null = sin límite, no agotado' })
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  stock?: number | null;
+}
+
+export class CreateExtraDto extends ExtraFieldsDto {
+  @ApiProperty({ example: 'Remera técnica' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  declare name: string;
+
+  @ApiProperty({ example: 12000, description: 'Centavos' })
+  @IsInt()
+  @Min(0)
+  declare priceCents: number;
+}
+
+export class UpdateExtraDto extends ExtraFieldsDto {}
+
+// ─── Alta y edición de usuarios ────────────────────────────────────────────
+
+export class CreateUserDto {
+  @ApiProperty({ example: 'organizador@paceup.bo' })
+  @IsEmail({}, { message: 'El email no tiene un formato válido' })
+  @MaxLength(254)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  email!: string;
+
+  @ApiProperty({ example: 'Alvaro Quispe' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  name!: string;
+
+  @ApiProperty({ example: 'Test1234', minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: PASSWORD_MESSAGE })
+  @MaxLength(128)
+  @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
+  password!: string;
+
+  @ApiPropertyOptional({ enum: UserRole, default: UserRole.runner })
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
+
+  @ApiPropertyOptional({
+    default: true,
+    description:
+      'Da el email por verificado. Por defecto **sí**: una cuenta creada a mano ya pasó por ' +
+      'una persona, y dejarla sin verificar la deja a medio camino sin que nadie le haya ' +
+      'mandado el correo.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  verified?: boolean;
+}
+
+export class UpdateUserDto {
+  @ApiPropertyOptional({ example: 'organizador@paceup.bo' })
+  @IsOptional()
+  @IsEmail({}, { message: 'El email no tiene un formato válido' })
+  @MaxLength(254)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  email?: string;
+
+  @ApiPropertyOptional({ example: 'Alvaro Quispe' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  name?: string;
+
+  @ApiPropertyOptional({ enum: UserRole })
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
+
+  @ApiPropertyOptional({ description: 'Marcar o desmarcar el email como verificado' })
+  @IsOptional()
+  @IsBoolean()
+  verified?: boolean;
+}
+
+/**
+ * Reset de contrasena hecho por un admin.
+ *
+ * Va en su propio endpoint y no como un campo mas de `UpdateUserDto` a
+ * proposito: cambiarle la contrasena a alguien no es lo mismo que corregirle el
+ * nombre, y mezclarlos hace que un PUT de rutina pueda echar a un usuario de
+ * todas sus sesiones sin que quien lo mando se entere.
+ */
+export class SetPasswordDto {
+  @ApiProperty({ example: 'Test1234', minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: PASSWORD_MESSAGE })
+  @MaxLength(128)
+  @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
+  password!: string;
 }

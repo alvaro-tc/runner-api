@@ -101,6 +101,17 @@ function flash(msg, malo) {
   setTimeout(() => { el.style.display = 'none'; }, 4000);
 }
 
+/**
+ * Confirmacion para lo que no tiene vuelta atras.
+ *
+ * Solo delante de un borrado: un panel que pregunta por todo entrena a quien lo
+ * usa a darle a "aceptar" sin leer, y entonces ya no protege del borrado que
+ * importa.
+ */
+function confirmar(mensaje) {
+  return window.confirm(mensaje);
+}
+
 /** Toda llamada pasa por aqui: un solo sitio que pone el token y desenvuelve. */
 async function api(ruta, opciones = {}) {
   const res = await fetch(API + ruta, {
@@ -166,6 +177,18 @@ const PESTANAS = [
 
 let actual = 0;
 
+/**
+ * El manejador de clics de la vista que este pintada.
+ *
+ * Uno solo, colgado del contenedor y no de cada boton: la tabla se repinta
+ * entera despues de cada accion, y volver a enganchar un listener por fila
+ * significaria acumular uno encima de otro hasta que un clic dispara la accion
+ * cinco veces.
+ */
+let manejadorClic = null;
+
+$('#view').addEventListener('click', (ev) => { if (manejadorClic) manejadorClic(ev); });
+
 function pintarTabs() {
   $('#tabs').innerHTML = PESTANAS
     .map(([nombre], i) => '<button class="' + (i === actual ? 'on' : '') + '" data-i="' + i + '">' + nombre + '</button>')
@@ -175,8 +198,14 @@ function pintarTabs() {
 async function abrir(i) {
   actual = i;
   pintarTabs();
+  await pintar(PESTANAS[i][1]);
+}
+
+/** Pinta una vista en el contenedor, soltando antes el manejador de la anterior. */
+async function pintar(vista, ...args) {
+  manejadorClic = null;
   $('#view').innerHTML = '<p class="muted">Cargando…</p>';
-  try { await PESTANAS[i][1](); } catch (e) { $('#view').innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; }
+  try { await vista(...args); } catch (e) { $('#view').innerHTML = '<p class="bad">' + esc(e.message) + '</p>'; }
 }
 
 // ─── Maratones ───────────────────────────────────────────────────────────────
@@ -184,27 +213,31 @@ async function abrir(i) {
 async function vistaMaratones() {
   const maratones = await api('/admin/marathons');
 
-  $('#view').innerHTML = '<h2>Maratones (' + maratones.length + ')</h2>' + tabla(
-    ['Maratón', 'Largada', 'Cupos', 'Estado', 'Publicada', 'Cargo', 'Acciones'],
-    maratones,
-    (m) => [
-      '<strong>' + esc(m.name) + '</strong><br><span class="muted">' + esc(m.city) + ' · ' + esc(m.slug) + '</span>',
-      fecha(m.startsAt),
-      m.slotsTaken + ' / ' + m.capacity,
-      esc(m.resolved) + (m.intent !== m.resolved ? '<br><span class="muted">declarado: ' + esc(m.intent) + '</span>' : ''),
-      m.published ? '<span class="ok">sí</span>' : '<span class="muted">borrador</span>',
-      m.feeOverride ? (m.feeOverride.enabled ? 'propio' : '<span class="bad">exenta</span>') : '<span class="muted">global</span>',
-      [
-        boton(m.published ? 'Despublicar' : 'Publicar', 'publicar', m.id),
-        boton(m.resolved === 'closed' ? 'Reabrir' : 'Cerrar inscr.', 'cerrar', m.id),
-        boton('CSV inscritos', 'csv', m.id),
-        boton('Recalcular puestos', 'ranks', m.id),
-        m.feeOverride ? boton('Quitar cargo propio', 'quitarFee', m.id) : boton('Eximir del cargo', 'eximir', m.id),
-      ].join(''),
-    ],
-  );
+  $('#view').innerHTML =
+    '<h2>Maratones (' + maratones.length + ')</h2>' +
+    '<div class="row"><button class="act" data-accion="nueva">+ Nueva maratón</button></div>' +
+    tabla(
+      ['Maratón', 'Largada', 'Cupos', 'Estado', 'Publicada', 'Cargo', 'Acciones'],
+      maratones,
+      (m) => [
+        '<strong>' + esc(m.name) + '</strong><br><span class="muted">' + esc(m.city) + ' · ' + esc(m.slug) + '</span>',
+        fecha(m.startsAt),
+        m.slotsTaken + ' / ' + m.capacity,
+        esc(m.resolved) + (m.intent !== m.resolved ? '<br><span class="muted">declarado: ' + esc(m.intent) + '</span>' : ''),
+        m.published ? '<span class="ok">sí</span>' : '<span class="muted">borrador</span>',
+        m.feeOverride ? (m.feeOverride.enabled ? 'propio' : '<span class="bad">exenta</span>') : '<span class="muted">global</span>',
+        [
+          boton('Editar', 'editar', m.id),
+          boton(m.published ? 'Despublicar' : 'Publicar', 'publicar', m.id),
+          boton(m.resolved === 'closed' ? 'Reabrir' : 'Cerrar inscr.', 'cerrar', m.id),
+          boton('CSV inscritos', 'csv', m.id),
+          boton('Recalcular puestos', 'ranks', m.id),
+          m.feeOverride ? boton('Quitar cargo propio', 'quitarFee', m.id) : boton('Eximir del cargo', 'eximir', m.id),
+        ].join(''),
+      ],
+    );
 
-  $('#view').addEventListener('click', async (ev) => {
+  manejadorClic = async (ev) => {
     const b = ev.target.closest('button[data-accion]');
     if (!b) return;
 
@@ -212,6 +245,8 @@ async function vistaMaratones() {
     const maraton = maratones.find((m) => m.id === id);
 
     try {
+      if (b.dataset.accion === 'nueva') { pintar(vistaEditorMaraton, null); return; }
+      if (b.dataset.accion === 'editar') { pintar(vistaEditorMaraton, id); return; }
       if (b.dataset.accion === 'publicar') {
         await api('/admin/marathons/' + id + (maraton.published ? '/unpublish' : '/publish'), { method: 'POST' });
         flash(maraton.published ? 'Sacada del catálogo' : 'Publicada');
@@ -240,11 +275,251 @@ async function vistaMaratones() {
 
       abrir(actual);
     } catch (e) { flash(e.message, true); }
-  }, { once: true });
+  };
 }
 
 function boton(texto, accion, id) {
   return '<button class="act" data-accion="' + accion + '" data-id="' + id + '">' + texto + '</button>';
+}
+
+/**
+ * Alta y edicion de una maraton, con sus categorias y sus extras.
+ *
+ * Con el id en null es un alta; con id, una edicion cargada desde
+ * /admin/marathons/:id. Es el mismo formulario en los dos casos a proposito:
+ * dos pantallas distintas para crear y para editar acaban divergiendo y con un
+ * campo que solo se puede poner al crear.
+ *
+ * Las categorias y los extras solo aparecen al editar: hasta que la maraton no
+ * existe no hay a que colgarlos. Por eso el alta, al guardar, no vuelve a la
+ * lista sino que reabre esta misma pantalla ya en modo edicion.
+ */
+async function vistaEditorMaraton(id) {
+  const m = id ? await api('/admin/marathons/' + id) : null;
+  const v = (x) => (x === null || x === undefined ? '' : x);
+
+  // El <input datetime-local> habla en hora local del navegador y la API en
+  // UTC: sin corregir el desfase, guardar sin tocar la fecha la movería.
+  const paraInput = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  };
+
+  const campo = (id_, etiqueta, valor, extra) =>
+    '<label>' + etiqueta + '<input id="' + id_ + '" value="' + esc(valor) + '" ' + (extra || '') + '></label>';
+
+  $('#view').innerHTML =
+    '<div class="row"><button class="act" data-accion="volver">← Maratones</button></div>' +
+    '<h2>' + (m ? 'Editar ' + esc(m.name) : 'Nueva maratón') + '</h2>' +
+    '<form class="card" id="marForm">' +
+      '<div class="row">' +
+        campo('name', 'Nombre *', v(m?.name), 'required style="min-width:260px"') +
+        campo('slug', 'Slug', v(m?.slug), 'placeholder="se deriva del nombre"') +
+      '</div>' +
+      '<div class="row">' +
+        campo('startsAt', 'Largada *', paraInput(m?.startsAt), 'type="datetime-local" required') +
+        campo('timezone', 'Zona horaria', v(m?.timezone) || 'America/La_Paz') +
+        campo('registrationClosesAt', 'Cierre de inscripciones', paraInput(m?.registrationClosesAt), 'type="datetime-local"') +
+      '</div>' +
+      '<div class="row">' +
+        campo('city', 'Ciudad *', v(m?.city), 'required') +
+        campo('country', 'País', v(m?.country) || 'BO', 'maxlength="2" style="width:70px"') +
+        campo('lat', 'Latitud', v(m?.lat), 'type="number" step="any" style="width:120px"') +
+        campo('lng', 'Longitud', v(m?.lng), 'type="number" step="any" style="width:120px"') +
+      '</div>' +
+      '<div class="row">' +
+        campo('distanceMeters', 'Distancia (m) *', v(m?.distanceMeters), 'type="number" min="1" required style="width:130px"') +
+        campo('capacity', 'Cupos *', v(m?.capacity), 'type="number" min="1" required style="width:110px"') +
+        campo('priceCents', 'Precio (centavos) *', v(m?.priceCents), 'type="number" min="0" required style="width:150px"') +
+        campo('currency', 'Moneda', v(m?.currency) || 'BOB', 'maxlength="3" style="width:80px"') +
+        '<label>Publicada<select id="published">' +
+          '<option value="false"' + (m?.published ? '' : ' selected') + '>borrador</option>' +
+          '<option value="true"' + (m?.published ? ' selected' : '') + '>sí</option>' +
+        '</select></label>' +
+      '</div>' +
+      '<div class="row">' +
+        campo('coverUrl', 'Portada (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
+        campo('includes', 'Incluye (separado por comas)', (m?.includes || []).join(', '), 'style="min-width:280px"') +
+      '</div>' +
+      '<div class="row"><label style="flex:1">Descripción<textarea id="description" style="min-height:80px">' + esc(v(m?.description)) + '</textarea></label></div>' +
+      '<button class="act" type="submit">' + (m ? 'Guardar cambios' : 'Crear maratón') + '</button>' +
+      (m ? ' <button class="act" type="button" data-accion="borrarMaraton">Borrar maratón</button>' : '') +
+      '<span class="muted"> · el precio va en centavos: Bs 250,00 son 25000</span>' +
+    '</form>' +
+    (m ? bloqueCategorias(m) + bloqueExtras(m) : '<p class="muted">Las categorías y los adicionales se cargan una vez creada la maratón.</p>');
+
+  $('#marForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+
+    const texto = (campoId) => $('#' + campoId).value.trim();
+    // Un campo vacio es "sin valor", no cero ni cadena vacia: mandar 0 en la
+    // latitud pondria la carrera en el golfo de Guinea.
+    const numero = (campoId) => (texto(campoId) === '' ? null : Number(texto(campoId)));
+    const enUtc = (campoId) => (texto(campoId) === '' ? null : new Date(texto(campoId)).toISOString());
+
+    const cuerpo = {
+      name: texto('name'),
+      startsAt: enUtc('startsAt'),
+      timezone: texto('timezone') || undefined,
+      city: texto('city'),
+      country: texto('country') || undefined,
+      lat: numero('lat'),
+      lng: numero('lng'),
+      distanceMeters: numero('distanceMeters'),
+      capacity: numero('capacity'),
+      priceCents: numero('priceCents'),
+      currency: texto('currency') || undefined,
+      registrationClosesAt: enUtc('registrationClosesAt'),
+      coverUrl: texto('coverUrl') || null,
+      description: texto('description') || null,
+      includes: texto('includes') ? texto('includes').split(',').map((x) => x.trim()).filter(Boolean) : [],
+      published: $('#published').value === 'true',
+    };
+
+    // El slug vacio significa "derivalo del nombre", y eso solo vale al crear:
+    // en una edicion, mandarlo vacio seria pedir que cambie el de una carrera
+    // que ya se compartio por WhatsApp.
+    if (texto('slug')) cuerpo.slug = texto('slug');
+
+    try {
+      if (m) {
+        await api('/admin/marathons/' + m.id, { method: 'PUT', body: JSON.stringify(cuerpo) });
+        flash('Maratón guardada');
+        pintar(vistaEditorMaraton, m.id);
+      } else {
+        const creada = await api('/admin/marathons', { method: 'POST', body: JSON.stringify(cuerpo) });
+        flash('Maratón creada como ' + creada.slug);
+        pintar(vistaEditorMaraton, creada.id);
+      }
+    } catch (e) { flash(e.message, true); }
+  });
+
+  manejadorClic = async (ev) => {
+    const b = ev.target.closest('button[data-accion]');
+    if (!b) return;
+
+    try {
+      if (b.dataset.accion === 'volver') { abrir(0); return; }
+
+      if (b.dataset.accion === 'borrarMaraton') {
+        if (!confirmar('¿Borrar la maratón "' + m.name + '"? Solo se puede si no tiene inscritos.')) return;
+        await api('/admin/marathons/' + m.id, { method: 'DELETE' });
+        flash('Maratón borrada');
+        abrir(0);
+        return;
+      }
+
+      if (b.dataset.accion === 'nuevaCategoria' || b.dataset.accion === 'guardarCategoria') {
+        const catId = b.dataset.id;
+        const cuerpo = {
+          name: $('[data-cat-name="' + catId + '"]').value.trim(),
+          minAge: valorONulo('[data-cat-min="' + catId + '"]'),
+          maxAge: valorONulo('[data-cat-max="' + catId + '"]'),
+          gender: $('[data-cat-gender="' + catId + '"]').value || null,
+          extraPriceCents: Number($('[data-cat-price="' + catId + '"]').value || 0),
+        };
+
+        if (catId === 'nueva') {
+          await api('/admin/marathons/' + m.id + '/categories', { method: 'POST', body: JSON.stringify(cuerpo) });
+        } else {
+          await api('/admin/categories/' + catId, { method: 'PUT', body: JSON.stringify(cuerpo) });
+        }
+        flash('Categoría guardada');
+      }
+
+      if (b.dataset.accion === 'borrarCategoria') {
+        if (!confirmar('¿Borrar esta categoría? Las inscripciones que la usaban se quedan sin categoría.')) return;
+        const r = await api('/admin/categories/' + b.dataset.id, { method: 'DELETE' });
+        flash('Categoría borrada' + (r.registrationsWithoutCategory ? ' · ' + r.registrationsWithoutCategory + ' inscripción/es quedaron sin categoría' : ''));
+      }
+
+      if (b.dataset.accion === 'nuevoExtra' || b.dataset.accion === 'guardarExtra') {
+        const extraId = b.dataset.id;
+        const cuerpo = {
+          name: $('[data-extra-name="' + extraId + '"]').value.trim(),
+          priceCents: Number($('[data-extra-price="' + extraId + '"]').value || 0),
+          stock: valorONulo('[data-extra-stock="' + extraId + '"]'),
+        };
+
+        if (extraId === 'nuevo') {
+          await api('/admin/marathons/' + m.id + '/extras', { method: 'POST', body: JSON.stringify(cuerpo) });
+        } else {
+          await api('/admin/extras/' + extraId, { method: 'PUT', body: JSON.stringify(cuerpo) });
+        }
+        flash('Adicional guardado');
+      }
+
+      if (b.dataset.accion === 'borrarExtra') {
+        if (!confirmar('¿Borrar este adicional? Lo ya vendido no se pierde.')) return;
+        await api('/admin/extras/' + b.dataset.id, { method: 'DELETE' });
+        flash('Adicional borrado');
+      }
+
+      pintar(vistaEditorMaraton, m.id);
+    } catch (e) { flash(e.message, true); }
+  };
+}
+
+/** Un campo numerico vacio es "sin limite" o "sin tope de edad", no cero. */
+function valorONulo(selector) {
+  const valor = $(selector).value.trim();
+  return valor === '' ? null : Number(valor);
+}
+
+const GENEROS = ['', 'male', 'female', 'other', 'unspecified'];
+
+function bloqueCategorias(m) {
+  const fila = (c) =>
+    '<tr>' +
+      '<td><input data-cat-name="' + c.id + '" value="' + esc(c.name) + '" style="width:160px"></td>' +
+      '<td><input data-cat-min="' + c.id + '" type="number" min="0" value="' + (c.minAge ?? '') + '" style="width:70px"></td>' +
+      '<td><input data-cat-max="' + c.id + '" type="number" min="0" value="' + (c.maxAge ?? '') + '" style="width:70px"></td>' +
+      '<td><select data-cat-gender="' + c.id + '">' +
+        GENEROS.map((g) => '<option value="' + g + '"' + (c.gender === (g || null) ? ' selected' : '') + '>' + (g || 'cualquiera') + '</option>').join('') +
+      '</select></td>' +
+      '<td><input data-cat-price="' + c.id + '" type="number" min="0" value="' + (c.extraPriceCents ?? 0) + '" style="width:110px"></td>' +
+      '<td>' + boton('Guardar', 'guardarCategoria', c.id) + boton('Borrar', 'borrarCategoria', c.id) + '</td>' +
+    '</tr>';
+
+  const nueva =
+    '<tr>' +
+      '<td><input data-cat-name="nueva" placeholder="Nueva categoría" style="width:160px"></td>' +
+      '<td><input data-cat-min="nueva" type="number" min="0" style="width:70px"></td>' +
+      '<td><input data-cat-max="nueva" type="number" min="0" style="width:70px"></td>' +
+      '<td><select data-cat-gender="nueva">' + GENEROS.map((g) => '<option value="' + g + '">' + (g || 'cualquiera') + '</option>').join('') + '</select></td>' +
+      '<td><input data-cat-price="nueva" type="number" min="0" value="0" style="width:110px"></td>' +
+      '<td>' + boton('Agregar', 'nuevaCategoria', 'nueva') + '</td>' +
+    '</tr>';
+
+  return '<section class="card"><h2>Categorías (' + m.categories.length + ')</h2>' +
+    '<div class="wrap"><table><thead><tr>' +
+      '<th>Nombre</th><th>Edad mín.</th><th>Edad máx.</th><th>Género</th><th>Recargo (centavos)</th><th></th>' +
+    '</tr></thead><tbody>' + m.categories.map(fila).join('') + nueva + '</tbody></table></div></section>';
+}
+
+function bloqueExtras(m) {
+  const fila = (x) =>
+    '<tr>' +
+      '<td><input data-extra-name="' + x.id + '" value="' + esc(x.name) + '" style="width:200px"></td>' +
+      '<td><input data-extra-price="' + x.id + '" type="number" min="0" value="' + x.priceCents + '" style="width:120px"></td>' +
+      '<td><input data-extra-stock="' + x.id + '" type="number" min="0" value="' + (x.stock ?? '') + '" placeholder="sin límite" style="width:110px"></td>' +
+      '<td>' + boton('Guardar', 'guardarExtra', x.id) + boton('Borrar', 'borrarExtra', x.id) + '</td>' +
+    '</tr>';
+
+  const nuevo =
+    '<tr>' +
+      '<td><input data-extra-name="nuevo" placeholder="Nuevo adicional" style="width:200px"></td>' +
+      '<td><input data-extra-price="nuevo" type="number" min="0" value="0" style="width:120px"></td>' +
+      '<td><input data-extra-stock="nuevo" type="number" min="0" placeholder="sin límite" style="width:110px"></td>' +
+      '<td>' + boton('Agregar', 'nuevoExtra', 'nuevo') + '</td>' +
+    '</tr>';
+
+  return '<section class="card"><h2>Adicionales (' + m.extras.length + ')</h2>' +
+    '<div class="wrap"><table><thead><tr>' +
+      '<th>Nombre</th><th>Precio (centavos)</th><th>Stock</th><th></th>' +
+    '</tr></thead><tbody>' + m.extras.map(fila).join('') + nuevo + '</tbody></table></div>' +
+    '<p class="muted">Stock vacío = sin límite.</p></section>';
 }
 
 /**
@@ -349,7 +624,7 @@ async function vistaTransferencias() {
         '<button class="act" data-pago="' + p.id + '">Confirmar</button>',
     ]);
 
-  $('#view').addEventListener('click', async (ev) => {
+  manejadorClic = async (ev) => {
     const b = ev.target.closest('button[data-pago]');
     if (!b) return;
     const id = b.dataset.pago;
@@ -362,7 +637,7 @@ async function vistaTransferencias() {
       flash('Pago confirmado y dorsal emitido');
       abrir(actual);
     } catch (e) { flash(e.message, true); }
-  }, { once: true });
+  };
 }
 
 // ─── Inscripciones ───────────────────────────────────────────────────────────
@@ -430,28 +705,125 @@ async function vistaResultados() {
 
 // ─── Usuarios ────────────────────────────────────────────────────────────────
 
-async function vistaUsuarios() {
-  const pintar = (usuarios) => tabla(
-    ['Email', 'Nombre', 'Rol', 'Verificado', 'Inscripciones', 'Entrenamientos', 'Alta'],
-    usuarios,
-    (u) => [
-      esc(u.email), esc(u.name), esc(u.role),
-      u.verified ? '<span class="ok">sí</span>' : '<span class="muted">no</span>',
-      u.registrations, u.workouts, fecha(u.createdAt),
-    ],
-  );
+const ROLES = ['runner', 'admin'];
 
-  const usuarios = await api('/admin/users');
+/**
+ * Usuarios: alta, edicion en la propia fila y baja.
+ *
+ * Se edita en la tabla y no en una pantalla aparte porque lo que se cambia aqui
+ * son cuatro campos: obligar a entrar y salir de un formulario para corregir un
+ * nombre mal escrito es mas clics que el trabajo en si.
+ */
+async function vistaUsuarios(busqueda) {
+  const usuarios = await api('/admin/users' + (busqueda ? '?q=' + encodeURIComponent(busqueda) : ''));
+
+  const fila = (u) =>
+    '<tr>' +
+      '<td><input data-u-email="' + u.id + '" value="' + esc(u.email) + '" style="width:220px"></td>' +
+      '<td><input data-u-name="' + u.id + '" value="' + esc(u.name) + '" style="width:180px"></td>' +
+      '<td><select data-u-role="' + u.id + '">' +
+        ROLES.map((r) => '<option value="' + r + '"' + (u.role === r ? ' selected' : '') + '>' + r + '</option>').join('') +
+      '</select></td>' +
+      '<td><select data-u-verified="' + u.id + '">' +
+        '<option value="true"' + (u.verified ? ' selected' : '') + '>sí</option>' +
+        '<option value="false"' + (u.verified ? '' : ' selected') + '>no</option>' +
+      '</select></td>' +
+      '<td>' + u.registrations + '</td>' +
+      '<td>' + u.workouts + '</td>' +
+      '<td>' + fecha(u.createdAt) + '</td>' +
+      '<td>' +
+        boton('Guardar', 'guardarUsuario', u.id) +
+        boton('Contraseña', 'passwordUsuario', u.id) +
+        boton('Borrar', 'borrarUsuario', u.id) +
+      '</td>' +
+    '</tr>';
+
   $('#view').innerHTML =
-    '<h2>Usuarios</h2>' +
-    '<div class="row"><label>Buscar<input id="q" placeholder="email o nombre"></label>' +
-    '<button class="act" id="buscar">Buscar</button></div>' +
-    '<div id="lista">' + pintar(usuarios) + '</div>';
+    '<h2>Usuarios (' + usuarios.length + ')</h2>' +
+    '<form class="card" id="altaUsuario">' +
+      '<div class="row">' +
+        '<label>Email<input id="nuEmail" type="email" required style="width:220px"></label>' +
+        '<label>Nombre<input id="nuName" required style="width:180px"></label>' +
+        '<label>Contraseña<input id="nuPassword" type="password" required minlength="8" style="width:170px"></label>' +
+        '<label>Rol<select id="nuRole">' + ROLES.map((r) => '<option>' + r + '</option>').join('') + '</select></label>' +
+        '<button class="act" type="submit">Crear usuario</button>' +
+      '</div>' +
+      '<span class="muted">Mínimo 8 caracteres, con al menos una letra y un número. El email queda verificado.</span>' +
+    '</form>' +
+    '<div class="row">' +
+      '<label>Buscar<input id="q" placeholder="email o nombre" value="' + esc(busqueda || '') + '"></label>' +
+      '<button class="act" data-accion="buscar" data-id="-">Buscar</button>' +
+    '</div>' +
+    (usuarios.length
+      ? '<div class="wrap"><table><thead><tr>' +
+          '<th>Email</th><th>Nombre</th><th>Rol</th><th>Verificado</th><th>Inscr.</th><th>Entren.</th><th>Alta</th><th></th>' +
+        '</tr></thead><tbody>' + usuarios.map(fila).join('') + '</tbody></table></div>'
+      : '<p class="muted">No hay nada que mostrar.</p>');
 
-  $('#buscar').addEventListener('click', async () => {
-    const q = encodeURIComponent($('#q').value);
-    $('#lista').innerHTML = pintar(await api('/admin/users?q=' + q));
+  $('#altaUsuario').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      const creado = await api('/admin/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: $('#nuEmail').value.trim(),
+          name: $('#nuName').value.trim(),
+          password: $('#nuPassword').value,
+          role: $('#nuRole').value,
+        }),
+      });
+      flash('Usuario ' + creado.email + ' creado');
+      pintar(vistaUsuarios, busqueda);
+    } catch (e) { flash(e.message, true); }
   });
+
+  manejadorClic = async (ev) => {
+    const b = ev.target.closest('button[data-accion]');
+    if (!b) return;
+
+    const id = b.dataset.id;
+    const usuario = usuarios.find((u) => u.id === id);
+
+    try {
+      if (b.dataset.accion === 'buscar') { pintar(vistaUsuarios, $('#q').value.trim()); return; }
+
+      if (b.dataset.accion === 'guardarUsuario') {
+        await api('/admin/users/' + id, {
+          method: 'PUT',
+          body: JSON.stringify({
+            email: $('[data-u-email="' + id + '"]').value.trim(),
+            name: $('[data-u-name="' + id + '"]').value.trim(),
+            role: $('[data-u-role="' + id + '"]').value,
+            verified: $('[data-u-verified="' + id + '"]').value === 'true',
+          }),
+        });
+        flash('Usuario guardado');
+      }
+
+      if (b.dataset.accion === 'passwordUsuario') {
+        // Se pide en el momento y no se guarda en ningun campo de la pagina:
+        // una contrasena en un input que queda pintado es una contrasena que
+        // se lee por encima del hombro.
+        const nueva = prompt('Contraseña nueva para ' + usuario.email + ' (mín. 8, con letra y número):');
+        if (!nueva) return;
+
+        const r = await api('/admin/users/' + id + '/password', {
+          method: 'POST',
+          body: JSON.stringify({ password: nueva }),
+        });
+        flash('Contraseña cambiada · ' + r.sessionsRevoked + ' sesión/es cerradas');
+        return;
+      }
+
+      if (b.dataset.accion === 'borrarUsuario') {
+        if (!confirmar('¿Borrar la cuenta de ' + usuario.email + '? Se cancelan sus inscripciones futuras y no hay vuelta atrás.')) return;
+        await api('/admin/users/' + id, { method: 'DELETE' });
+        flash('Cuenta borrada');
+      }
+
+      pintar(vistaUsuarios, busqueda);
+    } catch (e) { flash(e.message, true); }
+  };
 }
 
 // ─── Arranque ────────────────────────────────────────────────────────────────
