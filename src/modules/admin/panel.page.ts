@@ -9,14 +9,20 @@
  * Va como plantilla de TypeScript y no como `.html` a proposito: asi entra en
  * `dist/` con el resto del codigo y no hay que tocar la configuracion de assets
  * del build para que el panel exista en produccion.
+ *
+ * El `nonce` lo genera el controlador en cada peticion y marca el `<style>` y el
+ * `<script>` como autorizados en la CSP. Sin el, helmet —que sirve una CSP con
+ * `script-src 'self'`— bloquea el script de la pagina y el panel se queda en un
+ * documento inerte: sin pestanas, sin login, sin nada.
  */
-export const PANEL_HTML = String.raw`<!doctype html>
+export function panelHtml(nonce: string): string {
+  return String.raw`<!doctype html>
 <html lang="es">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PaceUp · Administración</title>
-<style>
+<style nonce="${nonce}">
   :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --text:#e2e8f0; --muted:#94a3b8;
           --accent:#38bdf8; --ok:#4ade80; --bad:#f87171; }
   * { box-sizing: border-box; }
@@ -77,7 +83,7 @@ export const PANEL_HTML = String.raw`<!doctype html>
 
 <div id="flash"></div>
 
-<script>
+<script nonce="${nonce}">
 const API = '/api/v1';
 let token = sessionStorage.getItem('paceup_admin_token') || '';
 
@@ -475,3 +481,4 @@ if (token) { arrancar(); } else { $('#login').style.display = 'block'; }
 </script>
 </body>
 </html>`;
+}

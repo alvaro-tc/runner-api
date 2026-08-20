@@ -99,6 +99,16 @@ jobs:
 
             cd "$APP_DIR"
 
+            # Si el unit de systemd apunta a otro directorio, este despliegue no
+            # cambia nada: el servicio reiniciaria con la version vieja y el
+            # health check pasaria igual, asi que el fallo seria invisible.
+            WORKDIR_UNIT=$(systemctl show running-api -p WorkingDirectory --value 2>/dev/null || true)
+            if [ -n "$WORKDIR_UNIT" ] && [ "$WORKDIR_UNIT" != "$APP_DIR" ]; then
+              echo "▸ running-api corre en $WORKDIR_UNIT pero se esta desplegando en $APP_DIR."
+              echo "▸ Alinea APP_DIR con WorkingDirectory del unit (o al reves) antes de seguir."
+              exit 1
+            fi
+
             # dist/ se borra entero: un fichero .js huerfano de un rename viejo
             # se seguiria cargando y depurarlo es una tarde perdida.
             rm -rf dist
@@ -108,6 +118,30 @@ jobs:
             # Con devDependencies: el CLI de prisma y ts-node (que carga
             # prisma.config.ts) viven ahi y hacen falta para migrar.
             npm ci
+
+            # El CLI de Prisma no hereda el entorno del servicio: systemd le
+            # pasa el EnvironmentFile a Node, pero esta shell no lo ve y
+            # `migrate deploy` se queda sin DATABASE_URL. Se lee del propio
+            # unit para no duplicar la ruta —ni el secreto— en dos sitios.
+            ENV_FILE=$(systemctl show running-api -p EnvironmentFiles --value 2>/dev/null | awk '{print $1}' | sed 's/^-//' || true)
+            ENV_FILE=${ENV_FILE:-/etc/running-api/.env.production}
+
+            # Se extrae SOLO la linea que hace falta en vez de hacer
+            # `source` del fichero entero: es sintaxis de systemd, no de shell,
+            # y valores legitimos como `INVOICE_LEGAL_NAME=PaceUp SRL` (sin
+            # comillas) reventarian el script. `sudo cat` porque el fichero es
+            # 600 y de otro usuario; no se copia a disco en ningun momento.
+            if [ -r "$ENV_FILE" ]; then LEER="cat"; else LEER="sudo cat"; fi
+            DATABASE_URL=$($LEER "$ENV_FILE" | sed -n 's/^[[:space:]]*DATABASE_URL[[:space:]]*=[[:space:]]*//p' | head -n1 || true)
+            # systemd admite comillas alrededor del valor; el CLI no las quiere.
+            DATABASE_URL=${DATABASE_URL%\"}; DATABASE_URL=${DATABASE_URL#\"}
+            DATABASE_URL=${DATABASE_URL%\'}; DATABASE_URL=${DATABASE_URL#\'}
+            export DATABASE_URL
+
+            if [ -z "${DATABASE_URL:-}" ]; then
+              echo "▸ No se encontro DATABASE_URL en $ENV_FILE. No se puede migrar."
+              exit 1
+            fi
 
             npx prisma generate
             npx prisma migrate deploy
