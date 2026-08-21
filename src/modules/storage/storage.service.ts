@@ -27,6 +27,17 @@ export abstract class StorageService {
   abstract save(key: string, data: Buffer): Promise<StoredFile>;
   abstract delete(key: string): Promise<void>;
   abstract url(key: string): string;
+
+  /**
+   * Las imagenes se guardan como CLAVE de storage, pero algunas —la portada de
+   * una maraton, por ejemplo— pueden venir del sitio del organizador: si ya es
+   * absoluta se respeta tal cual. El cliente siempre recibe algo cargable.
+   */
+  publicUrl(valor: string | null | undefined): string | null {
+    if (!valor) return null;
+
+    return /^https?:\/\//i.test(valor) ? valor : this.url(valor);
+  }
 }
 
 /** Prefijo publico bajo el que `main.ts` sirve el directorio de subidas. */

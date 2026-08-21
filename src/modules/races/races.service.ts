@@ -509,6 +509,7 @@ export class RacesService {
       marathon: {
         ...carrera.marathon,
         startsAt: carrera.marathon.startsAt.toISOString(),
+        coverUrl: this.storage.publicUrl(carrera.marathon.coverUrl),
       },
       bibNumber: carrera.bibNumber,
       categoryName: carrera.category?.name ?? null,

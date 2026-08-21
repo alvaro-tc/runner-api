@@ -7,6 +7,7 @@ import { armarPagina, decodeCursor, despuesDe, encodeCursor } from '../../common
 import type { Prisma } from '../../../generated/prisma/client';
 import { cuposDisponibles, resolverEstado } from './registration-status';
 import { LIMITE_POR_DEFECTO, type ListMarathonsQueryDto } from './dto/marathon.dto';
+import { StorageService } from '../storage/storage.service';
 
 /**
  * Cuantas filas se piden por vuelta cuando hay filtro de estado, y cuantas
@@ -38,7 +39,10 @@ type FilaResumen = Prisma.MarathonGetPayload<{ select: typeof CAMPOS_RESUMEN }>;
 
 @Injectable()
 export class MarathonsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
+  ) {}
 
   /**
    * Catalogo paginado por cursor, ordenado por fecha de largada.
@@ -249,7 +253,9 @@ export class MarathonsService {
       distanceMeters: maraton.distanceMeters,
       priceCents: maraton.priceCents,
       currency: maraton.currency,
-      coverUrl: maraton.coverUrl,
+      // El afiche es lo que la app pinta en Home; sale siempre como URL
+      // cargable, venga de storage o del sitio del organizador.
+      coverUrl: this.storage.publicUrl(maraton.coverUrl),
       // El campo homonimo de la BD es solo la intencion del admin; lo que sale
       // por la API es el estado resuelto.
       registrationStatus: resolverEstado(maraton, ahora),

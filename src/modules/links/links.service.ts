@@ -87,7 +87,7 @@ export class LinksService {
         `${(maraton.distanceMeters / 1000).toFixed(maraton.distanceMeters % 1000 === 0 ? 0 : 1)} K ` +
         `en ${maraton.city} · ${fecha(maraton.startsAt, maraton.timezone)}. ` +
         'Inscribite desde la app.',
-      imageUrl: this.absoluta(maraton.coverUrl),
+      imageUrl: this.storage.publicUrl(maraton.coverUrl),
     };
   }
 
@@ -126,19 +126,8 @@ export class LinksService {
       // Solo si el corredor genero la tarjeta. Generarla es un acto deliberado
       // suyo (`POST /races/:id/share-card`); mientras no exista, no hay imagen
       // que ensenar.
-      imageUrl: this.absoluta(resultado.shareCardUrl),
+      imageUrl: this.storage.publicUrl(resultado.shareCardUrl),
     };
-  }
-
-  /**
-   * Las imagenes se guardan como CLAVE de storage, no como URL (ver
-   * `StorageService`). La portada de una maraton, en cambio, puede venir del
-   * sitio del organizador: si ya es absoluta se respeta tal cual.
-   */
-  private absoluta(valor: string | null): string | null {
-    if (!valor) return null;
-
-    return /^https?:\/\//i.test(valor) ? valor : this.storage.url(valor);
   }
 }
 

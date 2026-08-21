@@ -450,7 +450,7 @@ async function vistaEditorMaraton(id) {
         '</select></label>' +
       '</div>' +
       '<div class="row">' +
-        campo('coverUrl', 'Portada (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
+        campo('coverUrl', 'Afiche promocional (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
         campo('includes', 'Incluye (separado por comas)', (m?.includes || []).join(', '), 'style="min-width:280px"') +
       '</div>' +
       '<div class="row"><label style="flex:1">Descripción<textarea id="description" style="min-height:80px">' + esc(v(m?.description)) + '</textarea></label></div>' +
