@@ -3,6 +3,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { camposPresentes } from '../../common/utils/patch';
+import { aSlug } from '../../common/utils/slug';
 import { hashPassword } from '../auth/password';
 import { UsersService } from '../users/users.service';
 import { calcularServiceFee } from '../pricing/service-fee';
@@ -10,6 +11,7 @@ import { ServiceFeeConfigService } from '../pricing/service-fee.service';
 import { resolverEstado } from '../marathons/registration-status';
 import { PaymentsService } from '../payments/payments.service';
 import { RacesService } from '../races/races.service';
+import { RoutesService } from '../routes/routes.service';
 import {
   MarathonRegistrationStatus,
   PaymentStatus,
@@ -18,6 +20,7 @@ import {
   UserRole,
 } from '../../../generated/prisma/enums';
 import { Prisma } from '../../../generated/prisma/client';
+import type { CreateRouteDto, ListRoutesQueryDto, UpdateRouteDto } from '../routes/dto/route.dto';
 import { aCsv } from './csv';
 import type {
   CategoryFieldsDto,
@@ -80,23 +83,6 @@ function aUsuarioPublico(u: UsuarioSeleccionado) {
   };
 }
 
-/**
- * Nombre a slug: sin acentos, en minusculas y con guiones.
- *
- * La normalizacion NFD separa la letra de su tilde y el rango de combinantes la
- * borra, asi que "Maraton La Paz 3600" y "Maratón La Paz 3600" dan el mismo
- * slug. Lo que no hace es garantizar unicidad: de eso se encarga `slugLibre`.
- */
-function aSlug(texto: string): string {
-  return texto
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 140)
-    .replace(/-+$/g, '');
-}
 
 /**
  * Operaciones de administracion.
@@ -120,6 +106,7 @@ export class AdminService {
     private readonly fees: ServiceFeeConfigService,
     private readonly payments: PaymentsService,
     private readonly races: RacesService,
+    private readonly routes: RoutesService,
     private readonly users: UsersService,
   ) {}
 
@@ -569,17 +556,32 @@ export class AdminService {
    */
   async crearMaraton(dto: CreateMarathonDto) {
     const slug = await this.slugLibre(dto.slug ?? aSlug(dto.name));
+    const heredado = await this.heredarRecorrido(dto.routeId);
+
+    // Con recorrido, la distancia sale de la geometria y no del formulario: el
+    // mapa es lo que el corredor va a seguir, y un "42195" escrito a mano junto
+    // a un trazado de 38 km deja una carrera cuya meta no esta en el mapa.
+    const distanceMeters = heredado?.distanceMeters ?? dto.distanceMeters;
+
+    if (distanceMeters === undefined) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Elegi un recorrido (`routeId`) o indica la distancia en metros',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
 
     const maraton = await this.prisma.marathon.create({
       data: {
         ...this.datosDeMaraton(dto),
+        ...(heredado ?? {}),
         // Prisma exige los obligatorios explicitos: `datosDeMaraton` los
         // devuelve opcionales porque la misma funcion sirve para editar.
         name: dto.name,
         slug,
         startsAt: new Date(dto.startsAt),
         city: dto.city,
-        distanceMeters: dto.distanceMeters,
+        distanceMeters,
         capacity: dto.capacity,
         priceCents: dto.priceCents,
         publishedAt: dto.published ? new Date() : null,
@@ -608,10 +610,17 @@ export class AdminService {
         ? await this.slugLibre(dto.slug, marathonId)
         : undefined;
 
+    const heredado = await this.heredarRecorrido(dto.routeId);
+
     await this.prisma.marathon.update({
       where: { id: marathonId },
       data: {
         ...this.datosDeMaraton(dto),
+        // Cambiar de recorrido reescribe geometria, distancia y largada juntas:
+        // dejar la distancia vieja con el trazado nuevo es la incoherencia que
+        // este bloque existe para impedir.
+        ...(heredado ?? {}),
+        ...(dto.routeId === null ? { routeId: null } : {}),
         ...(slug ? { slug } : {}),
         // `published` es un booleano de cara al panel y una fecha en la base.
         // Republicar algo ya publicado no debe mover la fecha: es la que dice
@@ -623,6 +632,37 @@ export class AdminService {
     });
 
     return this.detalleMaraton(marathonId);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Recorridos preestablecidos
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * El panel delega entero en `RoutesService`.
+   *
+   * No hay logica aqui a proposito: medir una geometria y decidir si es valida
+   * es una sola regla, y una segunda copia en admin es como se acaba con el
+   * panel aceptando trazados que la API publica rechaza.
+   */
+  listarRecorridos(query: ListRoutesQueryDto) {
+    return this.routes.listar(query);
+  }
+
+  verRecorrido(id: string) {
+    return this.routes.detalle(id, true);
+  }
+
+  crearRecorrido(dto: CreateRouteDto) {
+    return this.routes.crear(dto);
+  }
+
+  actualizarRecorrido(id: string, dto: UpdateRouteDto) {
+    return this.routes.actualizar(id, dto);
+  }
+
+  borrarRecorrido(id: string) {
+    return this.routes.borrar(id);
   }
 
   /**
@@ -693,6 +733,9 @@ export class AdminService {
       includes: maraton.includes,
       kitPickup: maraton.kitPickup,
       routeGeoJson: maraton.routeGeoJson,
+      // De donde salio el trazado. El panel lo necesita para dejar el selector
+      // de recorrido marcado al abrir la edicion.
+      routeId: maraton.routeId,
       published: maraton.publishedAt !== null,
       publishedAt: maraton.publishedAt?.toISOString() ?? null,
       registrations: maraton._count.registrations,
@@ -976,6 +1019,20 @@ export class AdminService {
     }
 
     return datos;
+  }
+
+  /**
+   * Lo que la maraton copia del recorrido elegido, o `null` si no se eligio.
+   *
+   * `undefined` (no vino el campo) y `null` (desvincular) no son lo mismo: el
+   * primero no toca nada, el segundo suelta el recorrido dejando la geometria
+   * ya copiada donde esta. Borrarla tambien seria dejar la carrera sin mapa por
+   * un cambio administrativo.
+   */
+  private async heredarRecorrido(routeId: string | null | undefined) {
+    if (!routeId) return null;
+
+    return this.routes.paraMaraton(routeId);
   }
 
   private datosDeCategoria(dto: CategoryFieldsDto) {

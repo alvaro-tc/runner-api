@@ -1,4 +1,5 @@
-import { DEFORMACION, enDias, enDiasAHora, log, prisma, radioDeCircuito, titulo } from './comun';
+import { enDias, enDiasAHora, log, prisma, titulo } from './comun';
+import { rutaDeMaraton, sembrarRutas, type SemillaRuta } from './rutas';
 import type { Prisma } from '../../generated/prisma/client';
 import type { Gender, MarathonRegistrationStatus } from '../../generated/prisma/enums';
 
@@ -367,50 +368,55 @@ const MARATONES: SemillaMaraton[] = [
   },
 ];
 
-/**
- * Recorrido sintetico: un circuito cerrado alrededor del punto de largada.
- *
- * No es la traza real de ninguna carrera y no pretende serlo — copiar recorridos
- * ajenos al repo no aporta nada. Lo que si es real es la **forma** del dato: un
- * `LineString` GeoJSON con longitud coherente con la distancia de la carrera,
- * que es lo que necesita el mapa del cliente para dibujar algo y lo que necesita
- * `simplificar()` para tener algo que simplificar.
- */
-function recorrido(lat: number, lng: number, distanceMeters: number): Prisma.InputJsonObject {
-  const PUNTOS = 60;
-  const radioGrados = radioDeCircuito(distanceMeters);
-  // Un grado de longitud se acorta con la latitud; sin esto el circuito sale
-  // ovalado y la distancia dibujada no cuadra con la anunciada.
-  const correccion = Math.cos((lat * Math.PI) / 180);
 
-  const coordinates = Array.from({ length: PUNTOS + 1 }, (_, i) => {
-    const angulo = (i / PUNTOS) * 2 * Math.PI;
-    const r = radioGrados * (1 + DEFORMACION * Math.sin(3 * angulo));
+/** El recorrido que le toca a cada carrera del catalogo de ejemplo. */
+function aSemillaDeRuta(maraton: SemillaMaraton): SemillaRuta {
+  const km = Math.round(maraton.distanceMeters / 1000);
 
-    return [
-      Number((lng + (r * Math.cos(angulo)) / correccion).toFixed(6)),
-      Number((lat + r * Math.sin(angulo)).toFixed(6)),
-    ];
-  });
-
-  return { type: 'LineString', coordinates };
+  return {
+    slug: rutaDeMaraton(maraton.slug),
+    name: `Circuito ${maraton.city} ${km}K`,
+    description: `Trazado oficial de ${km} kilometros usado por ${maraton.name}.`,
+    city: maraton.city,
+    distanceMeters: maraton.distanceMeters,
+    lat: maraton.lat,
+    lng: maraton.lng,
+    elevationGainMeters: null,
+  };
 }
 
 /** Idempotente por `slug`: una maraton ya sembrada se deja como esta, incluido
  *  lo que se haya editado desde el panel. */
 export async function sembrarMaratones(): Promise<void> {
+  // Un recorrido por carrera, sembrado antes: la maraton se crea eligiendo uno,
+  // igual que desde el panel.
+  const rutas = await sembrarRutas(MARATONES.map(aSemillaDeRuta));
+
   titulo('Maratones');
 
   for (const semilla of MARATONES) {
     const existente = await prisma.marathon.findUnique({ where: { slug: semilla.slug } });
 
     if (existente) {
-      log(`${semilla.slug} ya existe`);
+      // Una maraton sembrada antes de que existieran los recorridos se quedo
+      // sin `routeId`. Se rellena y nada mas: la geometria que ya tiene es la
+      // que se le mostro a la gente, y pisarla seria cambiarle el mapa a una
+      // carrera en pie.
+      if (!existente.routeId) {
+        await prisma.marathon.update({
+          where: { id: existente.id },
+          data: { routeId: rutas.get(rutaDeMaraton(semilla.slug))!.id },
+        });
+        log(`${semilla.slug} ya existe (vinculada a su recorrido)`);
+      } else {
+        log(`${semilla.slug} ya existe`);
+      }
       continue;
     }
 
     const { categorias, extras, enDias: dias, horaLargada, cierraEnDias, ...datos } = semilla;
     const startsAt = enDiasAHora(dias, horaLargada);
+    const ruta = rutas.get(rutaDeMaraton(semilla.slug))!;
 
     await prisma.marathon.create({
       data: {
@@ -418,7 +424,11 @@ export async function sembrarMaratones(): Promise<void> {
         startsAt,
         registrationClosesAt: cierraEnDias === null ? null : enDias(cierraEnDias),
         kitPickup: datos.kitPickup ?? undefined,
-        routeGeoJson: recorrido(datos.lat, datos.lng, datos.distanceMeters),
+        // Copiada del recorrido, no generada aqui: es exactamente lo que hace
+        // el alta del panel cuando se elige un `routeId`.
+        routeId: ruta.id,
+        routeGeoJson: ruta.geoJson,
+        distanceMeters: ruta.distanceMeters,
         // Publicada dos meses antes de correrse, no "ahora": una carrera que ya
         // ocurrio no pudo publicarse despues de su largada, y `publishedAt` es
         // justo el campo que alguien va a mirar cuando cuadre fechas.

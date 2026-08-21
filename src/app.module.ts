@@ -14,6 +14,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { StorageModule } from './modules/storage/storage.module';
 import { UsersModule } from './modules/users/users.module';
 import { MarathonsModule } from './modules/marathons/marathons.module';
+import { RoutesModule } from './modules/routes/routes.module';
 import { PricingModule } from './modules/pricing/pricing.module';
 import { RegistrationsModule } from './modules/registrations/registrations.module';
 import { PaymentsModule } from './modules/payments/payments.module';
@@ -41,6 +42,7 @@ import { LinksModule } from './modules/links/links.module';
     AuthModule,
     UsersModule,
     MarathonsModule,
+    RoutesModule,
     PricingModule,
     RegistrationsModule,
     PaymentsModule,

@@ -19,6 +19,13 @@ import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RegistrationStatus } from '../../../generated/prisma/enums';
+import {
+  CreateRouteDto,
+  ListRoutesQueryDto,
+  RouteDetailDto,
+  RouteSummaryDto,
+  UpdateRouteDto,
+} from '../routes/dto/route.dto';
 import { AdminService } from './admin.service';
 import {
   ConfirmTransferDto,
@@ -122,6 +129,72 @@ export class AdminController {
     return this.admin.quitarFeeDeMaraton(id);
   }
 
+  // ─── Recorridos preestablecidos ──────────────────────────────────────────
+
+  @Get('routes')
+  @ApiOperation({
+    summary: 'Recorridos cargados, archivados incluidos',
+    description:
+      'Es lo que llena el selector de recorrido del formulario de alta. Con ' +
+      '`includeArchived=false` salen solo los que se pueden usar en una carrera nueva.',
+  })
+  @ApiResponse({ status: 200, type: [RouteSummaryDto] })
+  listarRecorridos(@Query() query: ListRoutesQueryDto) {
+    return this.admin.listarRecorridos({ ...query, includeArchived: query.includeArchived ?? true });
+  }
+
+  @Get('routes/:id')
+  @ApiOperation({
+    summary: 'Un recorrido con su trazado sin simplificar',
+    description: 'Sin simplificar porque desde aquí se edita: reguardar lo simplificado lo iría ' +
+      'desgastando en cada pasada.',
+  })
+  @ApiResponse({ status: 200, type: RouteDetailDto })
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'NOT_FOUND' })
+  verRecorrido(@Param('id') id: string) {
+    return this.admin.verRecorrido(id);
+  }
+
+  @Post('routes')
+  @ApiOperation({
+    summary: 'Cargar un recorrido',
+    description:
+      'La distancia **no se manda**: se mide sobre la geometría. Es la que después hereda cada ' +
+      'maratón que lo elija.',
+  })
+  @ApiResponse({ status: 201, type: RouteSummaryDto })
+  @ApiResponse({
+    status: 400,
+    type: ErrorResponseDto,
+    description: 'VALIDATION_ERROR: el GeoJSON no es un LineString utilizable',
+  })
+  crearRecorrido(@Body() dto: CreateRouteDto) {
+    return this.admin.crearRecorrido(dto);
+  }
+
+  @Put('routes/:id')
+  @ApiOperation({
+    summary: 'Editar o archivar un recorrido',
+    description:
+      'Cambiar la geometría **no toca** las maratones que ya salieron de él: se llevaron su ' +
+      'copia, y el trazado de una carrera corrida es historia, no configuración.',
+  })
+  @ApiResponse({ status: 200, type: RouteSummaryDto })
+  editarRecorrido(@Param('id') id: string, @Body() dto: UpdateRouteDto) {
+    return this.admin.actualizarRecorrido(id, dto);
+  }
+
+  @Delete('routes/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Borrar un recorrido que ninguna maratón usó',
+    description: 'Con carreras detrás se niega: lo que corresponde es archivarlo.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT: hay maratones' })
+  borrarRecorrido(@Param('id') id: string) {
+    return this.admin.borrarRecorrido(id);
+  }
+
   // ─── Maratones ───────────────────────────────────────────────────────────
 
   @Get('marathons')
@@ -142,7 +215,9 @@ export class AdminController {
     description:
       'Nace **como borrador** salvo que se mande `published: true`: una carrera recién cargada ' +
       'suele tener la fecha provisional, y publicarla sola la metería en el catálogo antes de ' +
-      'que nadie la revise. Sin `slug` se deriva del nombre y se desambigua con un sufijo.',
+      'que nadie la revise. Sin `slug` se deriva del nombre y se desambigua con un sufijo. ' +
+      'Con `routeId` la carrera **copia** el recorrido elegido (`GET /admin/routes`): trazado, ' +
+      'distancia medida y punto de largada. En ese caso `distanceMeters` sobra.',
   })
   @ApiResponse({ status: 201, description: 'La maratón creada, con sus categorías y extras' })
   crearMaraton(@Body() dto: CreateMarathonDto) {

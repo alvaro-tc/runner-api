@@ -9,7 +9,11 @@ import { RacesService } from '../races/races.service';
 import { LiveService } from '../realtime/live.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { Prisma } from '../../../generated/prisma/client';
-import { TrackingSessionStatus, WorkoutType } from '../../../generated/prisma/enums';
+import {
+  RegistrationStatus,
+  TrackingSessionStatus,
+  WorkoutType,
+} from '../../../generated/prisma/enums';
 import { calorias, consolidar, type Punto } from './metrics';
 import type { FinishSessionDto, StartSessionDto } from './dto/workout.dto';
 
@@ -360,15 +364,32 @@ export class WorkoutSessionsService {
     if (!existe) throw this.noExiste('La sesion del plan no existe');
   }
 
-  /** Devuelve la maraton de la inscripcion: es lo que convierte la sesion en carrera. */
+  /**
+   * Devuelve la maraton de la inscripcion: es lo que convierte la sesion en carrera.
+   *
+   * **Exige que este confirmada.** Un borrador a medias o un QR sin pagar no
+   * dan derecho a correr la carrera, y dejarlos pasar aqui pondria a esa
+   * persona en el mapa en vivo, en el ranking y en los resultados oficiales sin
+   * haber pagado ni tener dorsal. El cupo y el dorsal se toman al confirmar el
+   * pago; esta comprobacion es la otra mitad de esa misma regla.
+   */
   private async exigirInscripcionPropia(userId: string, registrationId: string): Promise<string> {
-    const existe = await this.prisma.registration.findFirst({
+    const inscripcion = await this.prisma.registration.findFirst({
       where: { id: registrationId, userId, deletedAt: null },
-      select: { marathonId: true },
+      select: { marathonId: true, status: true },
     });
-    if (!existe) throw this.noExiste('La inscripcion no existe');
+    if (!inscripcion) throw this.noExiste('La inscripcion no existe');
 
-    return existe.marathonId;
+    if (inscripcion.status !== RegistrationStatus.confirmed) {
+      throw new AppException(
+        ErrorCode.REGISTRATION_NOT_CONFIRMED,
+        'Esa inscripcion todavia no esta confirmada: termina el pago para poder largar',
+        HttpStatus.CONFLICT,
+        [{ status: inscripcion.status }],
+      );
+    }
+
+    return inscripcion.marathonId;
   }
 
   /**

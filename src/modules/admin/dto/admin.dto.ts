@@ -329,10 +329,29 @@ export class MarathonFieldsDto {
   @IsObject()
   kitPickup?: Record<string, unknown> | null;
 
-  @ApiPropertyOptional({ nullable: true, description: 'Recorrido en GeoJSON' })
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Recorrido en GeoJSON, dibujado a mano. Normalmente NO se manda: se elige un `routeId` ' +
+      'del catálogo de recorridos y la geometría se copia sola.',
+  })
   @IsOptional()
   @IsObject()
   routeGeoJson?: Record<string, unknown> | null;
+
+  @ApiPropertyOptional({
+    example: 'ckv...',
+    nullable: true,
+    description:
+      'Recorrido preestablecido (`GET /routes`). Al mandarlo, la carrera **copia** su ' +
+      'geometría, su distancia medida y su punto de largada: por eso `distanceMeters` no hace ' +
+      'falta al crear con recorrido, y si viene, el del recorrido manda. `null` desvincula, ' +
+      'sin borrar el trazado ya copiado.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  routeId?: string | null;
 
   @ApiPropertyOptional({
     description:
@@ -370,10 +389,16 @@ export class CreateMarathonDto extends MarathonFieldsDto {
   @MaxLength(120)
   declare city: string;
 
-  @ApiProperty({ example: 42195, description: 'Metros' })
+  @ApiPropertyOptional({
+    example: 42195,
+    description:
+      'Metros. Opcional **solo** si se manda `routeId`: en ese caso la distancia se mide sobre ' +
+      'la geometría del recorrido, que es la que dibuja el mapa. Sin recorrido es obligatorio.',
+  })
+  @IsOptional()
   @IsInt()
   @Min(1)
-  declare distanceMeters: number;
+  declare distanceMeters?: number;
 
   @ApiProperty({ example: 2000 })
   @IsInt()

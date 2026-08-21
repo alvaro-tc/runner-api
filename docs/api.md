@@ -135,6 +135,7 @@ agrega allí y se documenta aquí.
 | `REGISTRATION_NOT_EDITABLE` | 409 | Ya se confirmó o se canceló | Recargar el detalle |
 | `CATEGORY_REQUIRED` | 400 | Falta elegir categoría | Volver al paso 2 |
 | `CANCELLATION_NOT_ALLOWED` | 409 | La carrera ya ocurrió, o el estado no admite cancelar | No reintentar |
+| `REGISTRATION_NOT_CONFIRMED` | 409 | Se intentó largar una maratón con la inscripción sin confirmar. `details[0]` trae `status` | Llevar al paso de pago; no reintentar la largada |
 
 ### Planes de entrenamiento
 
@@ -452,6 +453,54 @@ devuelven como instantes UTC.
 Los borrados (`deletedAt`) no cuentan en ninguna de las cifras.
 
 ---
+
+## Recorridos preestablecidos
+
+Los trazados que reutilizan las carreras. Una ciudad tiene cuatro o cinco
+circuitos homologados y cada edición vuelve a usar uno, así que el organizador
+**elige** en vez de dibujar.
+
+**Público**, por lo mismo que el catálogo: un trazado oficial es información de
+difusión. Cargarlos y editarlos vive en `/admin/routes` y exige rol `admin`.
+
+### Endpoints
+
+| Método | Ruta | Qué hace |
+|---|---|---|
+| GET | `/routes?city=&includeArchived=` | Los recorridos disponibles, sin geometría |
+| GET | `/routes/:idOrSlug?full=` | Uno, con su `LineString`. Simplificado salvo `full=true` |
+| GET | `/admin/routes` | Igual, archivados incluidos |
+| POST | `/admin/routes` | Carga un recorrido |
+| PUT | `/admin/routes/:id` | Edita o archiva |
+| DELETE | `/admin/routes/:id` | Solo si ninguna maratón salió de él |
+
+### La distancia se mide, no se declara
+
+`POST /admin/routes` **no acepta** `distanceMeters`: se calcula sobre la
+geometría (haversine sobre cada tramo) y de ahí salen también `startLat` y
+`startLng`, desnormalizados desde el primer vértice. Un número escrito a mano
+que no cuadre con el trazado deja una carrera cuyo mapa no llega a la meta, y
+quien corre sigue el mapa.
+
+Se rechaza con `VALIDATION_ERROR` lo que no sea un `LineString` de al menos dos
+vértices, con pares **`[lng, lat]`** válidos, más de 100 m de largo y menos de
+10.000 vértices (por encima de eso es un track de GPS crudo subido por error).
+
+### La maratón se lleva una copia
+
+`POST /admin/marathons` con `routeId` **copia** a la carrera el trazado, la
+distancia medida y el punto de largada. `Marathon.routeId` queda solo como
+procedencia: editar después el recorrido **no** toca las maratones que ya
+salieron de él. El trazado de una carrera en pie es lo que se le enseñó a la
+gente, no configuración.
+
+Con `routeId`, `distanceMeters` sobra en el alta (y si viene, gana el del
+recorrido). Sin `routeId` sigue siendo obligatorio. `routeId: null` en un PUT
+desvincula sin borrar la geometría ya copiada.
+
+Un recorrido **archivado** no se puede elegir para una carrera nueva
+(`CONFLICT`), pero las que ya lo usaron siguen apuntando a él. Borrarlo con
+maratones detrás también responde `CONFLICT`: lo que corresponde es archivar.
 
 ## Maratones
 
@@ -1498,6 +1547,23 @@ túnel dejaría el entrenamiento con horas de parada inventadas.
 Los estados válidos son `active` → `paused` → `active` → `finished` /
 `discarded`. Cualquier otra transición es `SESSION_NOT_ACTIVE`, con el estado
 real en `details[0]`.
+
+### Correr una maratón: `registrationId`
+
+Arrancar con `registrationId` es lo que convierte la sesión en **carrera**: la
+sesión queda atada a esa maratón, sus puntos entran en el mapa en vivo de los
+espectadores y al cerrarla sale el resultado oficial con su puesto.
+
+La inscripción tiene que estar **`confirmed`**. Un borrador a medias o un QR sin
+pagar responden `REGISTRATION_NOT_CONFIRMED` (409, con el estado real en
+`details[0]`); una inscripción de otra persona responde `404`, sin revelar que
+existe. El cupo y el dorsal se toman al confirmar el pago, y esta comprobación
+es la otra mitad de esa misma regla: sin ella se podría correr —y clasificar—
+sin haber pagado.
+
+El cliente no debería llegar a ver ese error: `GET /races/me` solo devuelve
+inscripciones confirmadas, así que el botón de largar solo aparece donde el
+servidor va a decir que sí.
 
 ### Consolidación: los números los pone el servidor
 

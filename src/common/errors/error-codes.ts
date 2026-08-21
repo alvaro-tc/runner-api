@@ -70,6 +70,10 @@ export const ErrorCode = {
   CATEGORY_REQUIRED: 'CATEGORY_REQUIRED',
   /** La carrera ya ocurrio, o el estado no admite cancelacion. */
   CANCELLATION_NOT_ALLOWED: 'CANCELLATION_NOT_ALLOWED',
+  /** Se intento largar una maraton con una inscripcion que no esta confirmada:
+   *  borrador a medias, pago pendiente o cancelada. Correr la carrera es lo que
+   *  se compro, asi que la puerta es el estado de la inscripcion. */
+  REGISTRATION_NOT_CONFIRMED: 'REGISTRATION_NOT_CONFIRMED',
 
   // ─── Planes de entrenamiento ────────────────────────────────────────────
   /** Ya hay un plan activo. Solo puede haber uno: el cliente tiene que

@@ -168,6 +168,7 @@ function salir() {
 
 const PESTANAS = [
   ['Maratones', vistaMaratones],
+  ['Recorridos', vistaRecorridos],
   ['Cargo por servicio', vistaFee],
   ['Transferencias', vistaTransferencias],
   ['Inscripciones', vistaInscripciones],
@@ -282,6 +283,103 @@ function boton(texto, accion, id) {
   return '<button class="act" data-accion="' + accion + '" data-id="' + id + '">' + texto + '</button>';
 }
 
+// ─── Recorridos ──────────────────────────────────────────────────────────────
+
+/**
+ * Los trazados que despues eligen las maratones.
+ *
+ * La distancia **no se pide**: se mide sobre la geometria al guardar. Un campo
+ * de distancia aqui seria una invitacion a escribir 42195 junto a un trazado de
+ * 38 km, y quien corre sigue el mapa, no el numero.
+ */
+async function vistaRecorridos() {
+  const recorridos = await api('/admin/routes');
+
+  $('#view').innerHTML =
+    '<h2>Recorridos (' + recorridos.length + ')</h2>' +
+    '<form class="card" id="rutaForm">' +
+      '<div class="row">' +
+        '<label>Nombre *<input id="rName" required style="min-width:240px"></label>' +
+        '<label>Ciudad *<input id="rCity" required></label>' +
+        '<label>Desnivel + (m)<input id="rElev" type="number" min="0" style="width:120px"></label>' +
+      '</div>' +
+      '<div class="row"><label style="flex:1">Descripción<input id="rDesc" style="min-width:280px"></label></div>' +
+      '<div class="row"><label style="flex:1">GeoJSON del trazado *' +
+        '<textarea id="rGeo" required style="min-height:120px"></textarea>' +
+      '</label></div>' +
+      '<button class="act" type="submit">Cargar recorrido</button>' +
+      '<span class="muted"> · LineString con pares [lng, lat], por ejemplo ' +
+        esc('{"type":"LineString","coordinates":[[-68.13,-16.50],[-68.12,-16.51]]}') +
+        '. La distancia se mide sola sobre la geometría.</span>' +
+    '</form>' +
+    tabla(
+      ['Recorrido', 'Ciudad', 'Distancia', 'Desnivel', 'Estado', 'Acciones'],
+      recorridos,
+      (r) => [
+        '<strong>' + esc(r.name) + '</strong><br><span class="muted">' + esc(r.slug) + '</span>',
+        esc(r.city),
+        (r.distanceMeters / 1000).toFixed(2) + ' km',
+        r.elevationGainMeters === null ? '<span class="muted">—</span>' : r.elevationGainMeters + ' m',
+        r.archived ? '<span class="muted">archivado</span>' : '<span class="ok">disponible</span>',
+        [
+          boton(r.archived ? 'Desarchivar' : 'Archivar', 'archivar', r.id),
+          boton('Borrar', 'borrarRuta', r.id),
+        ].join(''),
+      ],
+    );
+
+  $('#rutaForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const texto = (campoId) => $('#' + campoId).value.trim();
+
+    let geoJson;
+    try {
+      geoJson = JSON.parse(texto('rGeo'));
+    } catch {
+      flash('El GeoJSON no es JSON válido', true);
+      return;
+    }
+
+    try {
+      const creado = await api('/admin/routes', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: texto('rName'),
+          city: texto('rCity'),
+          description: texto('rDesc') || undefined,
+          elevationGainMeters: texto('rElev') === '' ? undefined : Number(texto('rElev')),
+          geoJson,
+        }),
+      });
+      flash('Recorrido cargado: ' + (creado.distanceMeters / 1000).toFixed(2) + ' km medidos');
+      abrir(actual);
+    } catch (e) { flash(e.message, true); }
+  });
+
+  manejadorClic = async (ev) => {
+    const b = ev.target.closest('button[data-accion]');
+    if (!b) return;
+
+    const ruta = recorridos.find((r) => r.id === b.dataset.id);
+
+    try {
+      if (b.dataset.accion === 'archivar') {
+        await api('/admin/routes/' + ruta.id, {
+          method: 'PUT',
+          body: JSON.stringify({ archived: !ruta.archived }),
+        });
+        flash(ruta.archived ? 'Vuelve a estar disponible' : 'Archivado');
+      }
+      if (b.dataset.accion === 'borrarRuta') {
+        if (!confirm('¿Borrar ' + ruta.name + '?')) return;
+        await api('/admin/routes/' + ruta.id, { method: 'DELETE' });
+        flash('Recorrido borrado');
+      }
+      abrir(actual);
+    } catch (e) { flash(e.message, true); }
+  };
+}
+
 /**
  * Alta y edicion de una maraton, con sus categorias y sus extras.
  *
@@ -296,6 +394,9 @@ function boton(texto, accion, id) {
  */
 async function vistaEditorMaraton(id) {
   const m = id ? await api('/admin/marathons/' + id) : null;
+  // Los recorridos preestablecidos son el punto de partida de una carrera: se
+  // elige uno y la maraton copia su trazado y su distancia medida.
+  const recorridos = await api('/admin/routes?includeArchived=false');
   const v = (x) => (x === null || x === undefined ? '' : x);
 
   // El <input datetime-local> habla en hora local del navegador y la API en
@@ -329,7 +430,17 @@ async function vistaEditorMaraton(id) {
         campo('lng', 'Longitud', v(m?.lng), 'type="number" step="any" style="width:120px"') +
       '</div>' +
       '<div class="row">' +
-        campo('distanceMeters', 'Distancia (m) *', v(m?.distanceMeters), 'type="number" min="1" required style="width:130px"') +
+        '<label style="flex:1">Recorrido preestablecido<select id="routeId">' +
+          '<option value="">— sin recorrido (distancia a mano) —</option>' +
+          recorridos.map((r) =>
+            '<option value="' + esc(r.id) + '"' + (m?.routeId === r.id ? ' selected' : '') + '>' +
+              esc(r.name) + ' · ' + esc(r.city) + ' · ' + (r.distanceMeters / 1000).toFixed(1) + ' km' +
+            '</option>').join('') +
+        '</select></label>' +
+        '<span class="muted">al elegir uno, la distancia y el trazado salen de él</span>' +
+      '</div>' +
+      '<div class="row">' +
+        campo('distanceMeters', 'Distancia (m)', v(m?.distanceMeters), 'type="number" min="1" style="width:130px"') +
         campo('capacity', 'Cupos *', v(m?.capacity), 'type="number" min="1" required style="width:110px"') +
         campo('priceCents', 'Precio (centavos) *', v(m?.priceCents), 'type="number" min="0" required style="width:150px"') +
         campo('currency', 'Moneda', v(m?.currency) || 'BOB', 'maxlength="3" style="width:80px"') +
@@ -367,6 +478,9 @@ async function vistaEditorMaraton(id) {
       lat: numero('lat'),
       lng: numero('lng'),
       distanceMeters: numero('distanceMeters'),
+      // Vacio = desvincular. La API distingue "no vino el campo" de "ponlo a
+      // null", y aqui el select siempre viene: mandarlo siempre es lo correcto.
+      routeId: $('#routeId').value || null,
       capacity: numero('capacity'),
       priceCents: numero('priceCents'),
       currency: texto('currency') || undefined,

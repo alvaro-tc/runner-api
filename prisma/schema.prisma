@@ -330,6 +330,51 @@ model Device {
 //  MARATONES
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Recorrido preestablecido, reutilizable entre carreras.
+///
+/// Existe porque el organizador NO dibuja el trazado cada vez: una ciudad tiene
+/// cuatro o cinco circuitos homologados y cada edicion vuelve a usar uno. Al
+/// crear la maraton se elige uno de aqui y sus datos —geometria, distancia y
+/// punto de largada— se **copian** a la maraton.
+///
+/// Se copian y no se leen por la relacion a proposito: retocar el circuito para
+/// la edicion del ano que viene no puede cambiar el recorrido de la carrera que
+/// ya se corrio. `routeId` queda como procedencia, para saber de donde salio.
+model Route {
+  id          String  @id @default(cuid())
+  slug        String  @unique
+  name        String
+  description String?
+
+  city    String
+  country String @default("BO")
+
+  /// Largo del trazado en metros. Es el que hereda la maraton.
+  distanceMeters Int
+
+  /// Punto de largada: la primera coordenada de `geoJson`, desnormalizada para
+  /// poder listar y centrar un mapa sin parsear la geometria entera.
+  startLat Float
+  startLng Float
+
+  /// `LineString` GeoJSON. Es lo unico que dibuja el movil.
+  geoJson Json
+
+  /// Desnivel positivo acumulado, si se conoce.
+  elevationGainMeters Int?
+
+  /// Un recorrido archivado deja de ofrecerse para carreras nuevas, pero las
+  /// que ya lo usaron siguen apuntando a el.
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  marathons Marathon[]
+
+  @@index([city])
+  @@map("routes")
+}
+
 model Marathon {
   id          String  @id @default(cuid())
   slug        String  @unique
@@ -357,8 +402,12 @@ model Marathon {
   registrationStatus  MarathonRegistrationStatus @default(open)
   registrationClosesAt DateTime?
 
-  /// Recorrido como GeoJSON. Se envia simplificado al movil.
+  /// Recorrido como GeoJSON. Se envia simplificado al movil. Es una **copia**
+  /// del `Route` elegido al crearla, no una vista de el: ver `model Route`.
   routeGeoJson Json?
+  /// De que recorrido preestablecido salio `routeGeoJson`. Solo procedencia.
+  routeId      String?
+  route        Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
   /// Cronograma: `[{ time, title, description }]`.
   schedule     Json  @default("[]")
   /// Que incluye la inscripcion: `["remera", "medalla", "hidratacion"]`.
@@ -384,6 +433,7 @@ model Marathon {
   @@index([startsAt])
   @@index([registrationStatus, startsAt])
   @@index([city])
+  @@index([routeId])
   @@map("marathons")
 }
 
