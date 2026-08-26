@@ -135,6 +135,28 @@ export const envSchema = z.object({
     .default(5 * 1024 * 1024),
   /// Lado del avatar cuadrado que se guarda. Todo lo que llega se redimensiona.
   AVATAR_SIZE_PX: z.coerce.number().int().positive().default(512),
+
+  // --- Cobro por QR manual (TEMPORAL, ver docs/pago-qr-manual.md) ----------
+  /// Tamano maximo del comprobante ANTES de procesar. 8 MB: una captura de
+  /// pantalla de banca movil pesa menos, pero una foto de un telefono nuevo no.
+  PAYMENT_PROOF_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024),
+  /// Ancho maximo al que se reescala el comprobante guardado. 1600 px deja el
+  /// numero de transaccion legible y evita guardar fotos de 12 MP.
+  PAYMENT_PROOF_MAX_WIDTH_PX: z.coerce.number().int().positive().default(1600),
+  /// Horas que se le dan al corredor para subir el comprobante. Pasadas, el
+  /// cobro queda `failed` y el cupo se suelta: sin esto un QR sin pagar
+  /// bloquearia una plaza para siempre.
+  PAYMENT_PROOF_TTL_HOURS: z.coerce.number().int().positive().default(48),
+  /// Deja abierta la inscripcion publica desde la web. Apagarlo cierra
+  /// `/public/*` de golpe sin desplegar codigo.
+  PUBLIC_REGISTRATION_ENABLED: z
+    .string()
+    .default('true')
+    .transform((v) => v !== 'false'),
 });
 
 export type Env = z.infer<typeof envSchema>;

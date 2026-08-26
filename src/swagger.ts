@@ -1,9 +1,17 @@
 import type { INestApplication } from '@nestjs/common';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { DocumentBuilder, SwaggerModule, type OpenAPIObject } from '@nestjs/swagger';
 import { ErrorResponseDto, ResponseMetaDto } from './common/dto/response-envelope';
 import type { AppConfigService } from './config/app-config.service';
 
-export function setupSwagger(app: INestApplication, config: AppConfigService): void {
+/**
+ * Compartido entre `setupSwagger` (sirve /api/docs en caliente) y
+ * `scripts/export-openapi.ts` (vuelca el mismo contrato a `api/openapi.yaml`
+ * para que Flutter lo consuma sin levantar el backend).
+ */
+export function buildOpenApiDocument(
+  app: INestApplication,
+  config: AppConfigService,
+): OpenAPIObject {
   const builder = new DocumentBuilder()
     .setTitle('PaceUp API')
     .setDescription(
@@ -33,9 +41,13 @@ export function setupSwagger(app: INestApplication, config: AppConfigService): v
     .addServer(`https://${config.get('API_DOMAIN')}`, 'VPS')
     .build();
 
-  const document = SwaggerModule.createDocument(app, builder, {
+  return SwaggerModule.createDocument(app, builder, {
     extraModels: [ResponseMetaDto, ErrorResponseDto],
   });
+}
+
+export function setupSwagger(app: INestApplication, config: AppConfigService): void {
+  const document = buildOpenApiDocument(app, config);
 
   SwaggerModule.setup('api/docs', app, document, {
     swaggerOptions: { persistAuthorization: true, tagsSorter: 'alpha', operationsSorter: 'alpha' },

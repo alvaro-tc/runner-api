@@ -249,10 +249,46 @@ al final: cuando llega, la capa de datos ya está probada.
 
 ---
 
+## Sesión: un solo campo, y una puerta
+
+`POST /auth/login` recibe **`identifier`**, no `email`: puede ser un correo o una
+CI, y quien decide es el servidor por el `@`. Dos campos obligarían al usuario a
+recordar con cuál se dio de alta, que es lo que no recuerda.
+
+`GET /auth/me` trae `mustChangePassword`. Cuando es `true`, la contraseña la puso
+otro —alta desde la web: usuario CI, contraseña CI— y **el guard del router tiene
+que atrapar al usuario** en la pantalla de cambio hasta que llame a
+`POST /auth/change-password`. No es un aviso que se pueda descartar: esa
+contraseña la sabe cualquiera que le haya visto el carnet.
+
+Ojo con el arranque: el flag no vive en el dispositivo, así que una sesión
+restaurada tiene que releer `/auth/me` antes de dar por buena la navegación.
+
+## Cobro por QR verificado a mano (temporal)
+
+Cuarto método de pago, `qr_manual`. La app pinta el QR del organizador
+(`payment.methodDetails.manualQr`), el corredor sube una captura con
+`POST /payments/:id/proof` y **el cobro sigue `pending`** hasta que un
+organizador la aprueba.
+
+Dos cosas que la app tiene que hacer distinto aquí:
+
+- **No sondear.** Al otro lado no hay un banco que responda en segundos, hay una
+  persona que va a mirar una imagen cuando pueda. El sondeo de dos segundos que
+  sirve para el QR simulado aquí sólo gasta batería.
+- **No ofrecer el método si la maratón no trae `paymentQrUrl`.** Sin QR cargado
+  el checkout responde `QR_NOT_CONFIGURED`, y enseñarlo sería prometer un pago
+  que va a fallar en el último paso.
+
+Todo el flujo, en [`pago-qr-manual.md`](./pago-qr-manual.md).
+
+---
+
 ## Credenciales de prueba
 
 `runner@test.com` · `runner2@test.com` · `admin@test.com`, contraseña
-`Test1234!`.
+`Test1234!`. Sus CI son `6789012LP`, `5544332CB` y `1000001LP`: sirven para
+entrar por el mismo campo que el correo.
 
 `runner@test.com` es el único con actividad sembrada: cuatro meses de
 entrenamientos con GPS, un plan de 21K a mitad de camino, cuatro inscripciones

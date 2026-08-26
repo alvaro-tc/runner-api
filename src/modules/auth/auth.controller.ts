@@ -20,6 +20,7 @@ import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import {
   AuthSessionResponseDto,
   AuthUserDto,
+  ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
   LogoutDto,
@@ -143,6 +144,21 @@ export class AuthController {
   })
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto);
+  }
+
+  @Post('change-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @Throttle(LIMITE_CREDENCIALES)
+  @ApiOperation({
+    summary: 'Cambia la contrasena con la sesion abierta',
+    description:
+      'Obligatorio cuando `/auth/me` devuelve `mustChangePassword: true` (alta desde la web: ' +
+      'usuario CI, contrasena CI). Cierra **las demas** sesiones y deja viva la actual.',
+  })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'INVALID_CREDENTIALS' })
+  changePassword(@CurrentUser() user: AccessTokenPayload, @Body() dto: ChangePasswordDto) {
+    return this.auth.changePassword(user.sub, user.sessionId, dto);
   }
 
   @Get('me')

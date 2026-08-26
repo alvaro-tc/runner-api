@@ -30,6 +30,9 @@ export const ErrorCode = {
   INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
   /** Ya hay una cuenta con ese email. */
   EMAIL_ALREADY_REGISTERED: 'EMAIL_ALREADY_REGISTERED',
+  /** Ya hay una cuenta con esa CI. La CI es la segunda credencial de acceso,
+   *  asi que choca igual que un email repetido. */
+  CI_ALREADY_REGISTERED: 'CI_ALREADY_REGISTERED',
   /** El refresh token no existe, caduco o ya se reemplazo. El cliente debe
    *  limpiar el storage y volver a Welcome. */
   INVALID_REFRESH_TOKEN: 'INVALID_REFRESH_TOKEN',
@@ -115,6 +118,19 @@ export const ErrorCode = {
   PAYMENT_ALREADY_SETTLED: 'PAYMENT_ALREADY_SETTLED',
   /** Todavia no hay comprobante: el cobro no llego a `paid`. */
   RECEIPT_NOT_AVAILABLE: 'RECEIPT_NOT_AVAILABLE',
+
+  // --- Cobro por QR manual (TEMPORAL, ver docs/pago-qr-manual.md) ----------
+  /** La maraton no tiene QR de cobro cargado: no admite el metodo `qr_manual`. */
+  QR_NOT_CONFIGURED: 'QR_NOT_CONFIGURED',
+  /** Se intento subir un comprobante a un cobro que no es `qr_manual`, o que ya
+   *  esta cerrado. */
+  PROOF_NOT_ALLOWED: 'PROOF_NOT_ALLOWED',
+  /** Ya hay un comprobante esperando revision para ese cobro. Subir otro
+   *  encima le daria al organizador dos imagenes y ninguna verdad. */
+  PROOF_ALREADY_IN_REVIEW: 'PROOF_ALREADY_IN_REVIEW',
+  /** El comprobante ya lo reviso alguien: aprobarlo o rechazarlo otra vez no
+   *  cambia nada y borraria quien lo decidio. */
+  PROOF_ALREADY_REVIEWED: 'PROOF_ALREADY_REVIEWED',
   // ─── Carreras ───────────────────────────────────────────────────────────
   /** La carrera todavia no tiene resultado: no se corrio, o el organizador aun
    *  no cargo los tiempos. No es un error del cliente, es un "todavia no". */

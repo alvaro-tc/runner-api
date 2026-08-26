@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 import { PaymentMethod, PaymentStatus } from '../../../../generated/prisma/enums';
 import { RegistrationDto } from '../../registrations/dto/registration.dto';
+import { ProofDto } from '../manual-qr/dto/proof.dto';
 
 const trim = () =>
   Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value));
@@ -186,6 +187,16 @@ export class PaymentDto {
 
   @ApiProperty({ nullable: true })
   refundedAt!: string | null;
+
+  @ApiProperty({
+    type: ProofDto,
+    nullable: true,
+    description:
+      'TEMPORAL — solo en el metodo `qr_manual`: el ultimo comprobante subido. Con ' +
+      '`status: in_review` el cobro **sigue pendiente**: haber mandado la captura no es haber ' +
+      'pagado. Ver `docs/pago-qr-manual.md`.',
+  })
+  proof?: ProofDto | null;
 
   @ApiProperty()
   createdAt!: string;

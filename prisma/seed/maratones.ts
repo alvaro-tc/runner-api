@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
+import * as QRCode from 'qrcode';
 import { enDias, enDiasAHora, log, prisma, titulo } from './comun';
 import { rutaDeMaraton, sembrarRutas, type SemillaRuta } from './rutas';
 import type { Prisma } from '../../generated/prisma/client';
@@ -422,6 +425,13 @@ export async function sembrarMaratones(): Promise<void> {
       data: {
         ...datos,
         startsAt,
+        // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`. Sin un
+        // QR sembrado no se puede probar el flujo en local: el checkout
+        // responderia `QR_NOT_CONFIGURED` y ahi se acaba la prueba.
+        paymentQrUrl: await sembrarQrDeCobro(semilla.slug),
+        paymentQrInstructions:
+          'Escanea con tu banca movil, paga el monto exacto y pon la glosa que aparece abajo ' +
+          'en el detalle de la transferencia.',
         registrationClosesAt: cierraEnDias === null ? null : enDias(cierraEnDias),
         kitPickup: datos.kitPickup ?? undefined,
         // Copiada del recorrido, no generada aqui: es exactamente lo que hace
@@ -440,4 +450,33 @@ export async function sembrarMaratones(): Promise<void> {
 
     log(`${semilla.slug} creada (${semilla.registrationStatus})`);
   }
+}
+
+/**
+ * TEMPORAL — genera el QR de cobro de una maraton de ejemplo.
+ * Ver `docs/pago-qr-manual.md`.
+ *
+ * Es un QR **de verdad**, escaneable, aunque lo que codifique sea inventado: un
+ * placeholder gris deja sin probar justo lo unico que hace el usuario en esa
+ * pantalla, que es apuntarle el telefono.
+ *
+ * Escribe directo en `UPLOADS_DIR` en vez de pasar por `StorageService` porque
+ * el seed corre fuera del contenedor de Nest y no tiene inyeccion de
+ * dependencias. Devuelve la **clave**, que es lo que se guarda en la columna.
+ */
+async function sembrarQrDeCobro(slug: string): Promise<string> {
+  const clave = `marathons/qr/${slug}.png`;
+  const raiz = resolve(process.env['UPLOADS_DIR'] ?? './uploads');
+  const destino = join(raiz, clave);
+
+  const png = await QRCode.toBuffer(`PACEUP-COBRO|${slug}`, {
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    width: 512,
+  });
+
+  await mkdir(dirname(destino), { recursive: true });
+  await writeFile(destino, png);
+
+  return clave;
 }

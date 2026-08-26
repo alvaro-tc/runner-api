@@ -29,6 +29,8 @@ const CAMPOS_RESUMEN = {
   priceCents: true,
   currency: true,
   coverUrl: true,
+  paymentQrUrl: true,
+  paymentQrInstructions: true,
   registrationStatus: true,
   capacity: true,
   slotsTaken: true,
@@ -256,6 +258,10 @@ export class MarathonsService {
       // El afiche es lo que la app pinta en Home; sale siempre como URL
       // cargable, venga de storage o del sitio del organizador.
       coverUrl: this.storage.publicUrl(maraton.coverUrl),
+      // TEMPORAL — cobro por QR manual. La app decide con esto si ofrece el
+      // metodo: sin QR cargado, ofrecerlo seria prometer un pago imposible.
+      paymentQrUrl: this.storage.publicUrl(maraton.paymentQrUrl),
+      paymentQrInstructions: maraton.paymentQrInstructions,
       // El campo homonimo de la BD es solo la intencion del admin; lo que sale
       // por la API es el estado resuelto.
       registrationStatus: resolverEstado(maraton, ahora),

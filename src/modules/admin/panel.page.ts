@@ -171,6 +171,8 @@ const PESTANAS = [
   ['Recorridos', vistaRecorridos],
   ['Cargo por servicio', vistaFee],
   ['Transferencias', vistaTransferencias],
+  // TEMPORAL - cobro por QR manual. Ver docs/pago-qr-manual.md
+  ['Comprobantes QR', vistaComprobantes],
   ['Inscripciones', vistaInscripciones],
   ['Resultados', vistaResultados],
   ['Usuarios', vistaUsuarios],
@@ -451,6 +453,13 @@ async function vistaEditorMaraton(id) {
       '</div>' +
       '<div class="row">' +
         campo('coverUrl', 'Afiche promocional (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
+        campo('paymentQrUrl', 'QR de cobro (URL)', v(m?.paymentQrUrl), 'style="min-width:280px"') +
+        campo(
+          'paymentQrInstructions',
+          'Instrucciones del QR',
+          v(m?.paymentQrInstructions),
+          'style="min-width:280px"',
+        ) +
         campo('includes', 'Incluye (separado por comas)', (m?.includes || []).join(', '), 'style="min-width:280px"') +
       '</div>' +
       '<div class="row"><label style="flex:1">Descripción<textarea id="description" style="min-height:80px">' + esc(v(m?.description)) + '</textarea></label></div>' +
@@ -486,6 +495,8 @@ async function vistaEditorMaraton(id) {
       currency: texto('currency') || undefined,
       registrationClosesAt: enUtc('registrationClosesAt'),
       coverUrl: texto('coverUrl') || null,
+      paymentQrUrl: texto('paymentQrUrl') || null,
+      paymentQrInstructions: texto('paymentQrInstructions') || null,
       description: texto('description') || null,
       includes: texto('includes') ? texto('includes').split(',').map((x) => x.trim()).filter(Boolean) : [],
       published: $('#published').value === 'true',
@@ -749,6 +760,56 @@ async function vistaTransferencias() {
         body: JSON.stringify({ reference: $('[data-ref="' + id + '"]').value || undefined }),
       });
       flash('Pago confirmado y dorsal emitido');
+      abrir(actual);
+    } catch (e) { flash(e.message, true); }
+  };
+}
+
+// --- Comprobantes de QR (TEMPORAL, ver docs/pago-qr-manual.md) --------------
+
+async function vistaComprobantes() {
+  const proofs = await api('/admin/payment-proofs');
+
+  $('#view').innerHTML = '<h2>Comprobantes por revisar (' + proofs.length + ')</h2>' +
+    '<p class="muted">Cuadrá la referencia contra el extracto antes de aprobar. ' +
+    'Aprobar toma el cupo y emite el dorsal; rechazar deja el cobro abierto para que ' +
+    'el corredor suba otro.</p>' +
+    tabla(['Corredor', 'Maratón', 'Importe', 'Referencia', 'Subido', 'Comprobante', ''], proofs, (p) => [
+      esc(p.runner) + '<br><span class="muted">' + esc(p.runnerCi ?? p.runnerEmail ?? '—') + '</span>',
+      esc(p.marathon),
+      bs(p.amountCents),
+      esc(p.reference ?? '—'),
+      fecha(p.createdAt),
+      '<a href="' + esc(p.imageUrl) + '" target="_blank" rel="noopener">' +
+        '<img src="' + esc(p.imageUrl) + '" alt="Comprobante" style="height:64px;border-radius:6px">' +
+        '</a>',
+      '<button class="act" data-aprobar="' + p.id + '">Aprobar</button> ' +
+        '<button class="act" data-rechazar="' + p.id + '">Rechazar</button>',
+    ]);
+
+  manejadorClic = async (ev) => {
+    const aprobar = ev.target.closest('button[data-aprobar]');
+    const rechazar = ev.target.closest('button[data-rechazar]');
+    if (!aprobar && !rechazar) return;
+
+    try {
+      if (aprobar) {
+        if (!confirmar('¿Dar por recibido este pago? Se emite el dorsal y no hay vuelta atrás.')) return;
+        await api('/admin/payment-proofs/' + aprobar.dataset.aprobar + '/approve', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        flash('Pago acreditado y dorsal emitido');
+      } else {
+        // El motivo lo lee el corredor: sin él no sabe qué corregir.
+        const nota = prompt('¿Por qué se rechaza? (lo va a leer el corredor)');
+        if (!nota) return;
+        await api('/admin/payment-proofs/' + rechazar.dataset.rechazar + '/reject', {
+          method: 'POST',
+          body: JSON.stringify({ note: nota }),
+        });
+        flash('Comprobante rechazado');
+      }
       abrir(actual);
     } catch (e) { flash(e.message, true); }
   };

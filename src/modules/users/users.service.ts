@@ -72,7 +72,7 @@ export class UsersService {
 
     // La comparacion es insensible a mayusculas porque la columna es citext:
     // cambiar `Ana@x.com` por `ana@x.com` no es un cambio de email.
-    if (dto.email && dto.email.toLowerCase() !== actual.email.toLowerCase()) {
+    if (dto.email && dto.email.toLowerCase() !== (actual.email ?? '').toLowerCase()) {
       const ocupado = await this.prisma.user.findUnique({
         where: { email: dto.email },
         select: { id: true },
@@ -258,9 +258,11 @@ export class UsersService {
 
   private toMe(user: {
     id: string;
-    email: string;
+    email: string | null;
+    ci: string | null;
     name: string;
     role: string;
+    mustChangePassword: boolean;
     emailVerifiedAt: Date | null;
     createdAt: Date;
     profile: PerfilCrudo | null;
@@ -270,8 +272,10 @@ export class UsersService {
     return {
       id: user.id,
       email: user.email,
+      ci: user.ci,
       name: user.name,
       role: user.role,
+      mustChangePassword: user.mustChangePassword,
       emailVerifiedAt: user.emailVerifiedAt?.toISOString() ?? null,
       createdAt: user.createdAt.toISOString(),
       profile: {

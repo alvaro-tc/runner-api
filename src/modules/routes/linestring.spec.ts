@@ -55,15 +55,43 @@ describe('resolverRecorrido', () => {
     ['otro tipo de geometria', { type: 'Polygon', coordinates: recta(11, 1000) }],
     ['sin coordenadas', { type: 'LineString' }],
     ['un solo vertice', { type: 'LineString', coordinates: [[0, 0]] }],
-    ['coordenadas no numericas', { type: 'LineString', coordinates: [['a', 'b'], [0, 1]] }],
-    ['latitud fuera de rango', { type: 'LineString', coordinates: [[0, 0], [0, 91]] }],
-    ['dos puntos pegados', { type: 'LineString', coordinates: [[0, 0], [0, 0.0001]] }],
+    [
+      'coordenadas no numericas',
+      {
+        type: 'LineString',
+        coordinates: [
+          ['a', 'b'],
+          [0, 1],
+        ],
+      },
+    ],
+    [
+      'latitud fuera de rango',
+      {
+        type: 'LineString',
+        coordinates: [
+          [0, 0],
+          [0, 91],
+        ],
+      },
+    ],
+    [
+      'dos puntos pegados',
+      {
+        type: 'LineString',
+        coordinates: [
+          [0, 0],
+          [0, 0.0001],
+        ],
+      },
+    ],
   ])('rechaza %s', (_caso, entrada) => {
     expect(resolverRecorrido(entrada)).toBeNull();
   });
 
   it('rechaza un track crudo de mas de MAX_VERTICES puntos', () => {
-    expect(resolverRecorrido({ type: 'LineString', coordinates: recta(MAX_VERTICES + 1, 1) }))
-      .toBeNull();
+    expect(
+      resolverRecorrido({ type: 'LineString', coordinates: recta(MAX_VERTICES + 1, 1) }),
+    ).toBeNull();
   });
 });

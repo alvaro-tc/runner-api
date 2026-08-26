@@ -314,6 +314,29 @@ export class MarathonFieldsDto {
   @MaxLength(500)
   coverUrl?: string | null;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'https://cdn.cam.org.bo/qr-maraton.png',
+    description:
+      'TEMPORAL — QR de cobro del organizador (URL absoluta o clave de storage, igual que ' +
+      '`coverUrl`). **Sin esto la carrera no admite el metodo `qr_manual`.** ' +
+      'Ver `docs/pago-qr-manual.md`.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  paymentQrUrl?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    example: 'Escanea con tu banca movil y pon la glosa que aparece abajo.',
+    description: 'TEMPORAL — texto que se pinta junto al QR.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  paymentQrInstructions?: string | null;
+
   @ApiPropertyOptional({ example: [{ time: '06:00', title: 'Acreditación' }] })
   @IsOptional()
   @IsArray()

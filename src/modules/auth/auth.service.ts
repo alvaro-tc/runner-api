@@ -7,17 +7,26 @@ import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { MailService } from '../mail/mail.service';
 import { hashPassword } from './password';
+import { esCiValida, esEmail, normalizarCi } from './ci';
 import { DeviceInfo, TokenService } from './token.service';
-import type { ForgotPasswordDto, LoginDto, RegisterDto, ResetPasswordDto } from './dto/auth.dto';
+import type {
+  ChangePasswordDto,
+  ForgotPasswordDto,
+  LoginDto,
+  RegisterDto,
+  ResetPasswordDto,
+} from './dto/auth.dto';
 
 /** Hash de una contrasena ficticia, para gastar tiempo cuando el email no existe. */
 const DUMMY_HASH_PROMISE = hashPassword('contrasena-que-nunca-nadie-usa');
 
 export interface UserPublic {
   id: string;
-  email: string;
+  email: string | null;
+  ci: string | null;
   name: string;
   role: string;
+  mustChangePassword: boolean;
   onboardingSeenAt: string | null;
 }
 
@@ -37,18 +46,17 @@ export class AuthService {
   // ─────────────────────────────────────────────────────────────────────────
 
   async register(dto: RegisterDto, device: DeviceInfo) {
-    const existente = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: { id: true },
-    });
+    const ci = dto.ci ? normalizarCi(dto.ci) : null;
 
-    if (existente) {
+    if (ci && !esCiValida(ci)) {
       throw new AppException(
-        ErrorCode.EMAIL_ALREADY_REGISTERED,
-        'Ya existe una cuenta con ese email',
-        HttpStatus.CONFLICT,
+        ErrorCode.VALIDATION_ERROR,
+        'La CI no tiene un formato valido',
+        HttpStatus.BAD_REQUEST,
       );
     }
+
+    await this.exigirCredencialesLibres(dto.email ?? null, ci);
 
     const passwordHash = await hashPassword(dto.password);
 
@@ -56,7 +64,8 @@ export class AuthService {
     // preguntarse si existen, y `onboardingSeenAt` empieza en null de verdad.
     const user = await this.prisma.user.create({
       data: {
-        email: dto.email,
+        email: dto.email ?? null,
+        ci,
         passwordHash,
         name: dto.name,
         profile: { create: {} },
@@ -73,11 +82,16 @@ export class AuthService {
     };
   }
 
+  /**
+   * Entra por email **o** por CI, con un solo campo.
+   *
+   * Cual de los dos es se decide por el `@` y no consultando la base: preguntar
+   * primero por email y despues por CI duplicaria la consulta y, sobre todo,
+   * abriria la puerta a responder distinto segun cual acerto. Aqui los dos
+   * caminos terminan en el mismo error.
+   */
   async login(dto: LoginDto, device: DeviceInfo) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      include: { preferences: { select: { onboardingSeenAt: true } } },
-    });
+    const user = await this.buscarPorCredencial(dto.identifier);
 
     // Se verifica SIEMPRE un hash, exista el usuario o no. Sin esto, un email
     // inexistente responderia en 1 ms y uno real en 100 ms, y esa diferencia
@@ -178,7 +192,9 @@ export class AuthService {
       select: { id: true, email: true, name: true, deletedAt: true },
     });
 
-    if (!user || user.deletedAt) {
+    // Sin email no hay a donde mandar el enlace. Responde `ok` igual: la unica
+    // regla de este endpoint es no decir nunca quien tiene cuenta.
+    if (!user || user.deletedAt || !user.email) {
       this.logger.debug(`Recuperacion pedida para un email sin cuenta: ${dto.email}`);
       return { ok: true };
     }
@@ -202,6 +218,8 @@ export class AuthService {
     ]);
 
     await this.mail.send({
+      // El guard de arriba ya descarto las cuentas sin email: sin correo no
+      // hay recuperacion por correo que valga.
       to: user.email,
       subject: 'Recupera tu contrasena de PaceUp',
       body: [
@@ -271,15 +289,129 @@ export class AuthService {
   }
 
   private toPublic(
-    user: { id: string; email: string; name: string; role: string },
+    user: {
+      id: string;
+      email: string | null;
+      ci: string | null;
+      name: string;
+      role: string;
+      mustChangePassword: boolean;
+    },
     onboardingSeenAt: Date | null,
   ): UserPublic {
     return {
       id: user.id,
       email: user.email,
+      ci: user.ci,
       name: user.name,
       role: user.role,
+      mustChangePassword: user.mustChangePassword,
       onboardingSeenAt: onboardingSeenAt?.toISOString() ?? null,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  //  Credenciales
+  // -------------------------------------------------------------------------
+
+  /**
+   * Busca al usuario por lo que sea que tecleo: email o CI.
+   *
+   * Devuelve `null` sin distinguir "no existe" de "no es un email valido": el
+   * unico consumidor es `login()`, y ahi los dos casos responden igual.
+   */
+  private buscarPorCredencial(identificador: string) {
+    const where = esEmail(identificador)
+      ? { email: identificador }
+      : { ci: normalizarCi(identificador) };
+
+    return this.prisma.user.findUnique({
+      where,
+      include: { preferences: { select: { onboardingSeenAt: true } } },
+    });
+  }
+
+  /**
+   * Ni el email ni la CI pueden estar ya tomados.
+   *
+   * Se comprueba aqui ademas de en el indice unico porque el mensaje importa:
+   * el error de Prisma no le dice a nadie cual de los dos choco.
+   */
+  private async exigirCredencialesLibres(email: string | null, ci: string | null): Promise<void> {
+    if (email) {
+      const previo = await this.prisma.user.findUnique({
+        where: { email },
+        select: { id: true },
+      });
+
+      if (previo) {
+        throw new AppException(
+          ErrorCode.EMAIL_ALREADY_REGISTERED,
+          'Ya existe una cuenta con ese email',
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+
+    if (ci) {
+      const previo = await this.prisma.user.findUnique({ where: { ci }, select: { id: true } });
+
+      if (previo) {
+        throw new AppException(
+          ErrorCode.CI_ALREADY_REGISTERED,
+          'Ya existe una cuenta con esa CI',
+          HttpStatus.CONFLICT,
+        );
+      }
+    }
+  }
+
+  /**
+   * Cambia la contrasena de quien ya esta dentro.
+   *
+   * Cierra **las demas** sesiones y deja viva la actual: el caso principal es
+   * el alta desde la web -contrasena inicial = CI, que la sabe cualquiera que
+   * vea el documento- y echar al usuario del telefono justo despues de pedirle
+   * que arregle eso convierte el arreglo en un castigo.
+   *
+   * Pide la contrasena actual aunque venga con token: un telefono desbloqueado
+   * un minuto no puede convertirse en un cambio de credenciales.
+   */
+  async changePassword(
+    userId: string,
+    sessionId: string,
+    dto: ChangePasswordDto,
+  ): Promise<{ ok: true }> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+
+    if (!user || user.deletedAt) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'Usuario no encontrado', HttpStatus.NOT_FOUND);
+    }
+
+    const valida = await argon2.verify(user.passwordHash, dto.currentPassword).catch(() => false);
+
+    if (!valida) {
+      throw new AppException(
+        ErrorCode.INVALID_CREDENTIALS,
+        'La contrasena actual no es correcta',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const passwordHash = await hashPassword(dto.newPassword);
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash, mustChangePassword: false },
+      }),
+      this.prisma.authSession.updateMany({
+        where: { userId, revokedAt: null, id: { not: sessionId } },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    this.logger.log(`Contrasena cambiada por el propio usuario ${userId}`);
+    return { ok: true };
   }
 }

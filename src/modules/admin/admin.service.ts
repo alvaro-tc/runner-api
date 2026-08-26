@@ -52,19 +52,23 @@ const SUBTOTAL_DE_EJEMPLO = 20_000;
 const SELECCION_USUARIO = {
   id: true,
   email: true,
+  ci: true,
   name: true,
   role: true,
   emailVerifiedAt: true,
+  mustChangePassword: true,
   createdAt: true,
   _count: { select: { registrations: true, workouts: true } },
 } as const;
 
 type UsuarioSeleccionado = {
   id: string;
-  email: string;
+  email: string | null;
+  ci: string | null;
   name: string;
   role: UserRole;
   emailVerifiedAt: Date | null;
+  mustChangePassword: boolean;
   createdAt: Date;
   _count: { registrations: number; workouts: number };
 };
@@ -74,15 +78,18 @@ function aUsuarioPublico(u: UsuarioSeleccionado) {
   return {
     id: u.id,
     email: u.email,
+    ci: u.ci,
     name: u.name,
     role: u.role,
     verified: u.emailVerifiedAt !== null,
+    // El panel lo pinta para saber quien entro por la web y todavia arrastra la
+    // CI como contrasena.
+    mustChangePassword: u.mustChangePassword,
     createdAt: u.createdAt.toISOString(),
     registrations: u._count.registrations,
     workouts: u._count.workouts,
   };
 }
-
 
 /**
  * Operaciones de administracion.
@@ -302,8 +309,17 @@ export class AdminService {
       { header: 'Dorsal', valor: (r) => r.bibNumber },
       { header: 'Nombre', valor: (r) => dato(r.personalData, 'fullName') || r.user.name },
       { header: 'Documento', valor: (r) => dato(r.personalData, 'docId') },
-      { header: 'Email', valor: (r) => r.user.email },
+      // El email del formulario manda sobre el de la cuenta: hay corredores
+      // que se inscriben sin cuenta propia y solo dejan correo aqui.
+      {
+        header: 'Email',
+        valor: (r) => dato(r.personalData, 'email') || (r.user.email ?? ''),
+      },
       { header: 'Telefono', valor: (r) => dato(r.personalData, 'phone') },
+      // Las dos preguntas del CAM. Son el motivo por el que el organizador
+      // exporta esta lista, no un extra: sin ellas tiene que abrir la BD.
+      { header: 'Conoce el CAM', valor: (r) => siNo(r.personalData, 'knowsCam') },
+      { header: 'Acepta llamada donante', valor: (r) => siNo(r.personalData, 'acceptsDonorCall') },
       { header: 'Categoria', valor: (r) => r.category?.name ?? '' },
       { header: 'Estado', valor: (r) => r.status },
       { header: 'Total (Bs)', valor: (r) => (r.totalCents / 100).toFixed(2) },
@@ -473,7 +489,7 @@ export class AdminService {
       id: r.id,
       marathon: r.marathon.name,
       runner: dato(r.personalData, 'fullName') || r.user.name,
-      email: r.user.email,
+      email: r.user.email ?? null,
       bibNumber: r.bibNumber,
       status: r.status,
       totalCents: r.totalCents,
@@ -508,7 +524,7 @@ export class AdminService {
       createdAt: p.createdAt.toISOString(),
       marathon: p.registration.marathon.name,
       runner: dato(p.registration.personalData, 'fullName') || p.registration.user.name,
-      email: p.registration.user.email,
+      email: p.registration.user.email ?? null,
     }));
   }
 
@@ -525,6 +541,7 @@ export class AdminService {
         ? {
             OR: [
               { email: { contains: busqueda, mode: 'insensitive' } },
+              { ci: { contains: busqueda, mode: 'insensitive' } },
               { name: { contains: busqueda, mode: 'insensitive' } },
             ],
           }
@@ -729,6 +746,9 @@ export class AdminService {
       resolved: resolverEstado(maraton),
       registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
       coverUrl: maraton.coverUrl,
+      // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
+      paymentQrUrl: maraton.paymentQrUrl,
+      paymentQrInstructions: maraton.paymentQrInstructions,
       schedule: maraton.schedule,
       includes: maraton.includes,
       kitPickup: maraton.kitPickup,
@@ -885,7 +905,7 @@ export class AdminService {
       );
     }
 
-    if (dto.email && dto.email.toLowerCase() !== actual.email.toLowerCase()) {
+    if (dto.email && dto.email.toLowerCase() !== (actual.email ?? '').toLowerCase()) {
       const ocupado = await this.prisma.user.findUnique({
         where: { email: dto.email },
         select: { id: true },
@@ -936,7 +956,9 @@ export class AdminService {
       data: { revokedAt: new Date() },
     });
 
-    this.logger.warn(`Contrasena de ${usuario.email} cambiada por un admin (${count} sesion/es cerradas)`);
+    this.logger.warn(
+      `Contrasena de ${usuario.email} cambiada por un admin (${count} sesion/es cerradas)`,
+    );
 
     return { ok: true, sessionsRevoked: count };
   }
@@ -997,6 +1019,9 @@ export class AdminService {
       'currency',
       'registrationStatus',
       'coverUrl',
+      // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
+      'paymentQrUrl',
+      'paymentQrInstructions',
     ]);
 
     if (dto.startsAt !== undefined) datos.startsAt = new Date(dto.startsAt);
@@ -1011,7 +1036,8 @@ export class AdminService {
     if (dto.schedule !== undefined) datos.schedule = dto.schedule as Prisma.InputJsonValue;
     if (dto.includes !== undefined) datos.includes = dto.includes as Prisma.InputJsonValue;
     if (dto.kitPickup !== undefined) {
-      datos.kitPickup = dto.kitPickup === null ? Prisma.DbNull : (dto.kitPickup as Prisma.InputJsonValue);
+      datos.kitPickup =
+        dto.kitPickup === null ? Prisma.DbNull : (dto.kitPickup as Prisma.InputJsonValue);
     }
     if (dto.routeGeoJson !== undefined) {
       datos.routeGeoJson =
@@ -1137,6 +1163,21 @@ export class AdminService {
 }
 
 /** `personalData` es jsonb libre: una fila vieja no debe tumbar un CSV. */
+/**
+ * Lector de los booleanos del formulario para el CSV.
+ *
+ * Un campo ausente sale vacio y **no** como "no": una inscripcion vieja, de
+ * antes de que existiera la pregunta, no respondio que no — no respondio.
+ */
+function siNo(personalData: unknown, campo: string): string {
+  if (personalData && typeof personalData === 'object' && !Array.isArray(personalData)) {
+    const valor = (personalData as Record<string, unknown>)[campo];
+    if (typeof valor === 'boolean') return valor ? 'si' : 'no';
+  }
+
+  return '';
+}
+
 function dato(personalData: unknown, campo: string): string {
   if (personalData && typeof personalData === 'object' && !Array.isArray(personalData)) {
     const valor = (personalData as Record<string, unknown>)[campo];

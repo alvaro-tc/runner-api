@@ -1,10 +1,10 @@
-import { HttpStatus, Inject, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { exigirClaveDeIdempotencia } from '../../common/idempotency';
 import { RegistrationsService } from '../registrations/registrations.service';
-import { PaymentMethod, PaymentStatus } from '../../../generated/prisma/enums';
+import { PaymentMethod, PaymentProviderName, PaymentStatus } from '../../../generated/prisma/enums';
 import type { Payment, Prisma } from '../../../generated/prisma/client';
 import { AppConfigService } from '../../config/app-config.service';
 import { MockPaymentProvider, MotivoAsincrono } from './mock/mock-payment.provider';
@@ -13,6 +13,9 @@ import type { CheckoutDto } from './dto/payment.dto';
 import { EventoDeWebhook, type WebhookEventDto } from './dto/webhook.dto';
 import { ResultadoDeVerificacion, verificar } from './webhook/signature';
 import { ReceiptService, type LineaDeComprobante } from './receipt/receipt.service';
+import { StorageService } from '../storage/storage.service';
+import { glosaDe, intentoDeQrManual } from './manual-qr/qr-intent';
+import { PaymentProofService } from './manual-qr/payment-proof.service';
 
 /**
  * Orquesta el paso 3: cobra y, si el cobro pasa, confirma la inscripcion.
@@ -38,6 +41,11 @@ export class PaymentsService {
     private readonly registrations: RegistrationsService,
     private readonly config: AppConfigService,
     private readonly receipts: ReceiptService,
+    private readonly storage: StorageService,
+    // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`. El ciclo es
+    // mutuo: aqui se abre el cobro y alli se cierra al aprobar el comprobante.
+    @Inject(forwardRef(() => PaymentProofService))
+    private readonly proofs: PaymentProofService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
   ) {}
 
@@ -51,6 +59,13 @@ export class PaymentsService {
       userId,
       registrationId,
     );
+
+    // TEMPORAL — el QR manual no pasa por ningun proveedor: se abre el cobro
+    // con el QR del organizador y se espera a que alguien mire el comprobante.
+    // Ver `docs/pago-qr-manual.md`.
+    if (dto.method === PaymentMethod.qr_manual) {
+      return this.abrirQrManual(registro.id, registro.marathonId, cotizacion, idempotencyKey);
+    }
 
     const intento = await this.provider.createIntent({
       amountCents: cotizacion.totalCents,
@@ -120,6 +135,17 @@ export class PaymentsService {
       );
     }
 
+    // El QR manual no tiene proveedor al que preguntar: lo cierra un
+    // organizador desde el panel. Atajarlo aqui evitaria probar justo lo unico
+    // que hay que probar de ese flujo, que es la revision.
+    if (pago.method === PaymentMethod.qr_manual) {
+      throw new AppException(
+        ErrorCode.PAYMENT_METHOD_NOT_SUPPORTED,
+        'Un cobro por QR se cierra aprobando su comprobante desde el panel',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     const acreditado = await this.acreditar(pago);
 
     return {
@@ -138,7 +164,7 @@ export class PaymentsService {
   async obtener(userId: string, paymentId: string) {
     const pago = await this.buscarPropio(userId, paymentId);
 
-    return this.toDto(await this.resolverPendiente(pago));
+    return this.conComprobante(await this.resolverPendiente(pago));
   }
 
   /** Historial de intentos de cobro de una inscripcion, del mas nuevo al mas viejo. */
@@ -163,7 +189,7 @@ export class PaymentsService {
 
     const resueltos = await Promise.all(pagos.map((p) => this.resolverPendiente(p)));
 
-    return resueltos.map((p) => this.toDto(p));
+    return Promise.all(resueltos.map((p) => this.conComprobante(p)));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -317,6 +343,20 @@ export class PaymentsService {
     let reembolsados = 0;
 
     for (const pago of pagados) {
+      // El QR manual no paso por ningun proveedor, asi que tampoco hay a quien
+      // pedirle el reembolso: el dinero lo devuelve una persona por el mismo
+      // canal por el que entro. Se registra fuerte y se sigue; el cupo ya se
+      // libero, que es lo unico que este metodo no puede dejar a medias.
+      if (pago.method === PaymentMethod.qr_manual) {
+        this.logger.warn(
+          `Cobro por QR ${pago.id} de la inscripcion ${registrationId}: la devolucion es ` +
+            'manual, no hay proveedor que la haga',
+        );
+        await this.marcarReembolsado(pago, 'manual_refund_required');
+        reembolsados += 1;
+        continue;
+      }
+
       try {
         if (pago.externalId) await this.provider.refund(pago.externalId);
         await this.marcarReembolsado(pago, 'cancelled_by_user');
@@ -531,10 +571,16 @@ export class PaymentsService {
       throw new AppException(ErrorCode.NOT_FOUND, 'El pago no existe', HttpStatus.NOT_FOUND);
     }
 
-    if (pago.method !== PaymentMethod.bank_transfer) {
+    // Los dos metodos que esperan a una persona: la transferencia, que se
+    // cuadra contra el extracto, y el QR manual, que se cuadra contra el
+    // comprobante que subio el corredor. Una tarjeta rechazada NO se arregla
+    // declarandola pagada, y por eso la lista es cerrada.
+    const CONFIRMABLES: PaymentMethod[] = [PaymentMethod.bank_transfer, PaymentMethod.qr_manual];
+
+    if (!CONFIRMABLES.includes(pago.method)) {
       throw new AppException(
         ErrorCode.PAYMENT_METHOD_NOT_SUPPORTED,
-        'Solo se confirman a mano los pagos por transferencia bancaria',
+        'Solo se confirman a mano los pagos por transferencia bancaria o por QR',
         HttpStatus.BAD_REQUEST,
         [{ method: pago.method }],
       );
@@ -612,11 +658,12 @@ export class PaymentsService {
     registrationId: string,
     idempotencyKey: string,
     intento: IntentoDePago,
+    proveedor: PaymentProviderName = this.provider.name,
   ): Promise<Payment> {
     return this.prisma.payment.create({
       data: {
         registrationId,
-        provider: this.provider.name,
+        provider: proveedor,
         method: intento.method,
         status: intento.status,
         amountCents: intento.amountCents,
@@ -669,6 +716,63 @@ export class PaymentsService {
         fallo instanceof Error ? fallo.stack : undefined,
       );
     }
+  }
+
+  /**
+   * TEMPORAL — abre un cobro por QR manual. Ver `docs/pago-qr-manual.md`.
+   *
+   * La inscripcion queda `pending_payment` con el QR del organizador pintado, y
+   * ahi se queda hasta que alguien apruebe el comprobante. **No confirma nada**:
+   * ver un QR no es haber pagado.
+   */
+  private async abrirQrManual(
+    registrationId: string,
+    marathonId: string,
+    cotizacion: { totalCents: number; currency: string },
+    idempotencyKey: string,
+  ) {
+    const maraton = await this.prisma.marathon.findUniqueOrThrow({
+      where: { id: marathonId },
+      select: { paymentQrUrl: true, paymentQrInstructions: true },
+    });
+
+    const qrImageUrl = this.storage.publicUrl(maraton.paymentQrUrl);
+
+    if (!qrImageUrl) {
+      throw new AppException(
+        ErrorCode.QR_NOT_CONFIGURED,
+        'Esta carrera todavia no tiene un QR de cobro cargado',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const intento = intentoDeQrManual({
+      amountCents: cotizacion.totalCents,
+      currency: cotizacion.currency,
+      qrImageUrl,
+      instructions: maraton.paymentQrInstructions,
+      reference: glosaDe(registrationId),
+      ttlHoras: this.config.get('PAYMENT_PROOF_TTL_HOURS'),
+    });
+
+    const pago = await this.crearPago(
+      registrationId,
+      idempotencyKey,
+      intento,
+      PaymentProviderName.manual,
+    );
+
+    return {
+      payment: this.toDto(pago),
+      registration: await this.registrations.detalleDe(registrationId),
+    };
+  }
+
+  /** El pago con su ultimo comprobante, si el metodo lo lleva. */
+  private async conComprobante(pago: Payment) {
+    if (pago.method !== PaymentMethod.qr_manual) return this.toDto(pago);
+
+    return { ...this.toDto(pago), proof: await this.proofs.ultimoDe(pago.id) };
   }
 
   private toDto(pago: Payment) {

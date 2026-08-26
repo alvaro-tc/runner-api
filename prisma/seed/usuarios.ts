@@ -13,6 +13,8 @@ export const PASSWORD_DE_PRUEBA = 'Test1234!';
 
 interface SemillaUsuario {
   email: string;
+  /** Cedula. Es la segunda credencial: se puede entrar con email o con CI. */
+  ci: string;
   name: string;
   role: UserRole;
   perfil: {
@@ -32,6 +34,7 @@ interface SemillaUsuario {
 const USUARIOS: SemillaUsuario[] = [
   {
     email: 'runner@test.com',
+    ci: '6789012LP',
     name: 'Alvaro Quispe',
     role: 'runner',
     perfil: {
@@ -51,6 +54,7 @@ const USUARIOS: SemillaUsuario[] = [
   },
   {
     email: 'runner2@test.com',
+    ci: '5544332CB',
     name: 'Camila Rojas',
     role: 'runner',
     perfil: {
@@ -70,6 +74,7 @@ const USUARIOS: SemillaUsuario[] = [
   },
   {
     email: 'admin@test.com',
+    ci: '1000001LP',
     name: 'Admin PaceUp',
     role: 'admin',
     perfil: {
@@ -113,6 +118,7 @@ export async function sembrarUsuarios(): Promise<Record<string, string>> {
     const creado = await prisma.user.create({
       data: {
         email: semilla.email,
+        ci: semilla.ci,
         name: semilla.name,
         role: semilla.role,
         passwordHash: await argon2.hash(PASSWORD_DE_PRUEBA),

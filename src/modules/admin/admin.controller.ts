@@ -140,13 +140,17 @@ export class AdminController {
   })
   @ApiResponse({ status: 200, type: [RouteSummaryDto] })
   listarRecorridos(@Query() query: ListRoutesQueryDto) {
-    return this.admin.listarRecorridos({ ...query, includeArchived: query.includeArchived ?? true });
+    return this.admin.listarRecorridos({
+      ...query,
+      includeArchived: query.includeArchived ?? true,
+    });
   }
 
   @Get('routes/:id')
   @ApiOperation({
     summary: 'Un recorrido con su trazado sin simplificar',
-    description: 'Sin simplificar porque desde aquí se edita: reguardar lo simplificado lo iría ' +
+    description:
+      'Sin simplificar porque desde aquí se edita: reguardar lo simplificado lo iría ' +
       'desgastando en cada pasada.',
   })
   @ApiResponse({ status: 200, type: RouteDetailDto })
@@ -498,7 +502,11 @@ export class AdminController {
       'pide el propio usuario: es el mismo camino, no una segunda implementación. Un admin no ' +
       'puede borrarse a sí mismo desde aquí.',
   })
-  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT: es tu propia cuenta' })
+  @ApiResponse({
+    status: 409,
+    type: ErrorResponseDto,
+    description: 'CONFLICT: es tu propia cuenta',
+  })
   borrarUsuario(@CurrentUser('sub') adminId: string, @Param('id') id: string) {
     return this.admin.borrarUsuario(id, adminId);
   }

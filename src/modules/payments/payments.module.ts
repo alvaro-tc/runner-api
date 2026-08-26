@@ -5,6 +5,12 @@ import { PaymentsService } from './payments.service';
 import { PAYMENT_PROVIDER } from './payment-provider';
 import { MockPaymentProvider } from './mock/mock-payment.provider';
 import { ReceiptService } from './receipt/receipt.service';
+// TEMPORAL — cobro por QR verificado a mano. Borrar estas dos lineas, la carpeta
+// `manual-qr/` y las dos entradas de abajo desmonta el flujo entero.
+// Ver `docs/pago-qr-manual.md`.
+import { PaymentProofController } from './manual-qr/payment-proof.controller';
+import { PaymentProofAdminController } from './manual-qr/payment-proof-admin.controller';
+import { PaymentProofService } from './manual-qr/payment-proof.service';
 
 /**
  * Pagos.
@@ -21,12 +27,13 @@ import { ReceiptService } from './receipt/receipt.service';
  */
 @Module({
   imports: [forwardRef(() => RegistrationsModule)],
-  controllers: [PaymentsController],
+  controllers: [PaymentsController, PaymentProofController, PaymentProofAdminController],
   providers: [
     PaymentsService,
     ReceiptService,
+    PaymentProofService,
     { provide: PAYMENT_PROVIDER, useClass: MockPaymentProvider },
   ],
-  exports: [PaymentsService],
+  exports: [PaymentsService, PaymentProofService],
 })
 export class PaymentsModule {}

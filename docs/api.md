@@ -268,10 +268,28 @@ códigos estables; el texto de `message` no lo es.
 | DELETE | `/auth/sessions/:id` | Sí | Cierra la sesión de otro dispositivo |
 | POST | `/auth/forgot-password` | — | Pide enlace de recuperación |
 | POST | `/auth/reset-password` | — | Cambia la contraseña con el token del correo |
+| POST | `/auth/change-password` | Sí | Cambia la contraseña con la sesión abierta |
 | GET | `/auth/me` | Sí | Datos del usuario autenticado |
 
-`register`, `login`, `forgot-password` y `reset-password` están limitados a
-**10 intentos por minuto y por IP** (`AUTH_RATE_LIMIT_PER_MINUTE`).
+`register`, `login`, `forgot-password`, `reset-password` y `change-password`
+están limitados a **10 intentos por minuto y por IP**
+(`AUTH_RATE_LIMIT_PER_MINUTE`).
+
+### Email **o** CI
+
+`login` recibe un solo campo, `identifier`. Si lleva `@` se trata como email; si
+no, como **CI**. Se decide por el carácter y no consultando la base: un endpoint
+que responde distinto según cuál acertó es un comprobador gratuito de quién tiene
+cuenta.
+
+En `register` hacen falta **email o CI, al menos uno**. La CI se guarda
+normalizada (mayúsculas, sin espacios ni guiones): `1234567 LP`, `1234567-lp` y
+`1234567LP` son la misma persona.
+
+`/auth/me` devuelve `mustChangePassword`. Cuando es `true`, la contraseña la puso
+otro —alta desde la web: usuario CI, contraseña CI— y la app **tiene que** mandar
+al usuario a `/auth/change-password` antes de dejarle usar nada. Ver
+[`pago-qr-manual.md`](./pago-qr-manual.md).
 
 ### El campo `deviceId`
 
@@ -1075,6 +1093,20 @@ tabla `payments`.
 | POST | `/payments/:id/mock-confirm` | Fuerza el cierre de un cobro pendiente. **Solo desarrollo** |
 | GET | `/payments/:id/receipt` | Comprobante en PDF (URL estable) |
 | POST | `/payments/webhook` | Eventos del proveedor. **Público**, firmado con HMAC |
+| POST | `/payments/:id/proof` | **Temporal** — sube el comprobante de un cobro `qr_manual` |
+| GET | `/payments/:id/proof` | **Temporal** — el último comprobante subido, o `null` |
+
+### Cobro por QR con verificación manual (temporal)
+
+Mientras no haya pasarela contratada existe un cuarto método, `qr_manual`: se
+muestra el QR bancario del organizador, el corredor sube una captura del pago y
+**un organizador verifica antes de confirmar nada**. Subir el comprobante deja
+`proof.status = in_review` y el cobro **sigue `pending`**: no hay dorsal ni cupo
+tomado hasta que alguien aprueba.
+
+Va con su propia web pública de inscripción (`/public/registrations`), su cola de
+revisión (`/admin/payment-proofs`) y su propio documento, que explica el flujo
+entero y cómo se desmonta: **[`pago-qr-manual.md`](./pago-qr-manual.md)**.
 
 ### El cuerpo del checkout
 

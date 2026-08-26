@@ -143,13 +143,16 @@ export class OsmAndQueryDto {
   lon!: string;
 
   @ApiPropertyOptional({
-    description: 'Unix en segundos o en milisegundos, o ISO-8601. Si falta, se usa la hora del servidor.',
+    description:
+      'Unix en segundos o en milisegundos, o ISO-8601. Si falta, se usa la hora del servidor.',
   })
   @IsOptional()
   @IsString()
   timestamp?: string;
 
-  @ApiPropertyOptional({ description: 'Se guarda tal cual, asumiendo m/s. Ver `docs/tracking.md`.' })
+  @ApiPropertyOptional({
+    description: 'Se guarda tal cual, asumiendo m/s. Ver `docs/tracking.md`.',
+  })
   @IsOptional()
   @IsString()
   speed?: string;

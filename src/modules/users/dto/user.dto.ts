@@ -178,14 +178,22 @@ export class MeDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty()
-  email!: string;
+  @ApiProperty({ nullable: true, description: 'Null si la cuenta se dio de alta solo con CI.' })
+  email!: string | null;
+
+  @ApiProperty({ nullable: true, example: '1234567LP', description: 'CI normalizada.' })
+  ci!: string | null;
 
   @ApiProperty()
   name!: string;
 
   @ApiProperty({ enum: ['runner', 'admin'] })
   role!: string;
+
+  @ApiProperty({
+    description: 'True = la contrasena la puso otro y hay que cambiarla antes de nada.',
+  })
+  mustChangePassword!: boolean;
 
   @ApiProperty({ nullable: true })
   emailVerifiedAt!: string | null;

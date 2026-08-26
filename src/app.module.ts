@@ -25,6 +25,8 @@ import { RacesModule } from './modules/races/races.module';
 import { HomeModule } from './modules/home/home.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { AdminModule } from './modules/admin/admin.module';
+// TEMPORAL — inscripcion desde la web publica. Ver `docs/pago-qr-manual.md`.
+import { PublicModule } from './modules/public/public.module';
 import { AppInfoModule } from './modules/app-info/app-info.module';
 import { LinksModule } from './modules/links/links.module';
 
@@ -53,6 +55,7 @@ import { LinksModule } from './modules/links/links.module';
     HomeModule,
     RealtimeModule,
     AdminModule,
+    PublicModule,
     AppInfoModule,
     LinksModule,
     HealthModule,

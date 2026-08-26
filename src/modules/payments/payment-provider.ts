@@ -39,6 +39,23 @@ export interface DetalleDeBanco {
   reference: string;
 }
 
+/**
+ * TEMPORAL — QR de cobro del organizador, verificado a mano.
+ *
+ * No lo emite ningun proveedor: es la imagen que cargo el organizador en la
+ * maraton. Va en un campo propio y no reutiliza `qr` a proposito: el dia que
+ * entre una pasarela real se borra este campo y el `qr` de verdad se queda como
+ * esta. Ver `docs/pago-qr-manual.md`.
+ */
+export interface DetalleDeQrManual {
+  /** URL publica del QR de la maraton. */
+  imageUrl: string;
+  /** Instrucciones del organizador: a que cuenta llega, que glosa poner. */
+  instructions: string | null;
+  /** Glosa que identifica la inscripcion en el extracto del organizador. */
+  reference: string;
+}
+
 /** Datos enmascarados que SI se pueden guardar y mostrar. Nunca el PAN. */
 export interface DetalleDeMetodo {
   /** `visa`, `mastercard`, `amex`, `unknown`. Solo para el metodo `card`. */
@@ -51,6 +68,8 @@ export interface DetalleDeMetodo {
   qr?: DetalleDeQr;
   /** Solo para el metodo `bank_transfer`. */
   bank?: DetalleDeBanco;
+  /** TEMPORAL — solo para el metodo `qr_manual`. */
+  manualQr?: DetalleDeQrManual;
 }
 
 /**

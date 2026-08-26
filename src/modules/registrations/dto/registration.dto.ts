@@ -3,6 +3,8 @@ import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
+  IsBoolean,
+  IsEmail,
   IsEnum,
   IsNotEmpty,
   IsOptional,
@@ -33,19 +35,53 @@ export class PersonalDataDto {
   @trim()
   fullName!: string;
 
-  @ApiProperty({ example: '1234567 LP', description: 'Documento de identidad' })
+  @ApiProperty({
+    example: '1234567 LP',
+    description:
+      'Cedula de identidad. Es la clave con la que se cruza una inscripcion hecha desde la web ' +
+      'con la cuenta que el corredor ya tenia en la app.',
+  })
   @IsString()
   @IsNotEmpty()
   @MaxLength(40)
   @trim()
   docId!: string;
 
-  @ApiPropertyOptional({ example: '+591 70000000' })
-  @IsOptional()
+  @ApiProperty({
+    example: '+591 70000000',
+    description: 'Celular. Obligatorio: es por donde el organizador avisa cambios de ultima hora.',
+  })
   @IsString()
+  @IsNotEmpty({ message: 'Hace falta un celular de contacto' })
   @MaxLength(40)
   @trim()
-  phone?: string;
+  phone!: string;
+
+  @ApiPropertyOptional({
+    example: 'corredor@mail.com',
+    description: 'Opcional a proposito: hay corredores que no tienen o no lo quieren dar.',
+  })
+  @IsOptional()
+  @IsEmail({}, { message: 'El email no tiene un formato valido' })
+  @MaxLength(254)
+  @trim()
+  email?: string;
+
+  @ApiProperty({
+    example: true,
+    description: '¿Conoce usted el trabajo del CAM?',
+  })
+  @IsBoolean()
+  knowsCam!: boolean;
+
+  @ApiProperty({
+    example: false,
+    description:
+      '¿Acepta que le llamemos para la oportunidad de ser un donador del CAM? ' +
+      'Es un consentimiento: se guarda tal cual lo respondio y no se asume nada por omision.',
+  })
+  @IsBoolean()
+  acceptsDonorCall!: boolean;
 
   @ApiPropertyOptional({ example: 'Maria Quispe' })
   @IsOptional()

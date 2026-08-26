@@ -85,6 +85,10 @@ const DATOS_PERSONALES = {
   emergencyContact: { name: 'Camila Rojas', phone: '+591 76543210' },
   bloodType: 'O+',
   shirtSize: 'M',
+  // Las dos preguntas del CAM. Se siembran respondidas para que el CSV de
+  // inscritos tenga las columnas con datos y no todas vacias.
+  knowsCam: true,
+  acceptsDonorCall: false,
 };
 
 /**

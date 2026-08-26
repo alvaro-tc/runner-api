@@ -75,12 +75,18 @@ enum RegistrationStatus {
 
 enum PaymentProviderName {
   mock
+  /// TEMPORAL — no hay proveedor detras: confirma una persona.
+  manual
 }
 
 enum PaymentMethod {
   card
   qr
   bank_transfer
+  /// TEMPORAL — cobro por QR verificado a mano. Ver `docs/pago-qr-manual.md`.
+  /// No pasa por ningun proveedor: el corredor sube un comprobante y un
+  /// organizador lo aprueba. Se borra el dia que entre una pasarela real.
+  qr_manual
 }
 
 enum PaymentStatus {
@@ -88,6 +94,17 @@ enum PaymentStatus {
   paid
   failed
   refunded
+}
+
+/// TEMPORAL — estado de un comprobante subido en el flujo de QR manual.
+/// Ver `docs/pago-qr-manual.md`.
+enum PaymentProofStatus {
+  /// Subido y esperando a que un organizador lo mire. El cobro sigue `pending`.
+  in_review
+  /// Aprobado: el cobro se marco `paid` y la inscripcion quedo confirmada.
+  approved
+  /// Rechazado. El cobro sigue `pending` para que el corredor suba otro.
+  rejected
 }
 
 enum PlanLevel {
@@ -153,10 +170,23 @@ enum PositionSource {
 
 model User {
   id              String    @id @default(cuid())
+  /// **Opcional**: hay corredores que se inscriben solo con su CI. Un usuario
+  /// tiene que tener al menos uno de los dos, y eso lo garantiza el codigo
+  /// (`AuthService`/`AdminService`), no la BD: un CHECK aqui bloquearia el
+  /// borrado en diferido, que vacia el email para liberarlo.
+  ///
   /// citext: la comparacion es insensible a mayusculas, asi que
   /// `Ana@Mail.com` y `ana@mail.com` son el mismo usuario a nivel de BD.
-  email           String    @unique @db.Citext
+  email           String?   @unique @db.Citext
+  /// Cedula de identidad. Es la **otra** credencial de acceso: se puede entrar
+  /// con email o con CI, y es la clave con la que la web de inscripcion cruza
+  /// un pago con la cuenta que ya existe en la app.
+  ci              String?   @unique
   passwordHash    String
+  /// El usuario entro con una contrasena que no eligio el (alta desde la web:
+  /// usuario CI, contrasena CI). La app le exige cambiarla antes de dejarle
+  /// hacer nada. Ver `docs/pago-qr-manual.md`.
+  mustChangePassword Boolean @default(false)
   name            String
   role            UserRole  @default(runner)
   emailVerifiedAt DateTime?
@@ -177,6 +207,7 @@ model User {
   trackingSessions    TrackingSession[]
   positions           Position[]
   feeConfigsUpdated   ServiceFeeConfig[]   @relation("ServiceFeeUpdatedBy")
+  proofsReviewed      PaymentProof[]       @relation("ProofReviewedBy")
 
   @@index([role])
   @@map("users")
@@ -416,6 +447,13 @@ model Marathon {
   kitPickup    Json?
   coverUrl     String?
 
+  /// TEMPORAL — QR de cobro del organizador (clave de storage o URL absoluta,
+  /// igual que `coverUrl`). Sin esto la maraton no admite `qr_manual`.
+  /// Ver `docs/pago-qr-manual.md`.
+  paymentQrUrl          String?
+  /// Texto libre que se pinta junto al QR: a que cuenta llega, que glosa poner.
+  paymentQrInstructions String?
+
   publishedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -539,6 +577,12 @@ model Registration {
   totalCents      Int    @default(0)
   currency        String @default("BOB")
 
+  /// TEMPORAL — token opaco que devuelve `POST /public/registrations` una sola
+  /// vez. Es lo que autoriza a la web publica a subir el comprobante y a
+  /// consultar el estado sin sesion. No sirve para nada mas.
+  /// Ver `docs/pago-qr-manual.md`.
+  publicToken String? @unique
+
   termsAcceptedAt DateTime?
   registeredAt    DateTime?
   cancelledAt     DateTime?
@@ -586,9 +630,44 @@ model Payment {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
+  proofs PaymentProof[]
+
   @@index([registrationId, status])
   @@index([status, createdAt])
   @@map("payments")
+}
+
+/// TEMPORAL — comprobante de un pago por QR, verificado a mano.
+///
+/// Tabla aparte y no columnas en `Payment` por dos razones: un cobro puede
+/// acumular varios intentos (se rechaza uno, el corredor sube otro) y borrar el
+/// dia que entre una pasarela real es `DROP TABLE` en vez de una migracion que
+/// toque la tabla de dinero. Ver `docs/pago-qr-manual.md`.
+model PaymentProof {
+  id        String  @id @default(cuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  /// Clave de storage de la imagen. Nunca la URL: ver `StorageService`.
+  imageKey String
+  status   PaymentProofStatus @default(in_review)
+
+  /// Numero de transaccion que teclea quien paga. Es lo que le permite al
+  /// organizador cuadrarlo contra el extracto sin abrir la imagen.
+  reference String?
+  /// Motivo del rechazo, o nota del organizador. Lo ve el corredor.
+  note      String?
+
+  reviewedById String?
+  reviewedBy   User?   @relation("ProofReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([paymentId, createdAt])
+  @@index([status, createdAt])
+  @@map("payment_proofs")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

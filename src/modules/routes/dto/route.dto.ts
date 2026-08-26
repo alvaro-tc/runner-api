@@ -1,14 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import {
-  IsBoolean,
-  IsInt,
-  IsObject,
-  IsOptional,
-  IsString,
-  MaxLength,
-  Min,
-} from 'class-validator';
+import { IsBoolean, IsInt, IsObject, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 
 const trim = () =>
   Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value));
@@ -64,7 +56,13 @@ export class RouteFieldsDto {
   country?: string;
 
   @ApiPropertyOptional({
-    example: { type: 'LineString', coordinates: [[-68.13, -16.5], [-68.12, -16.51]] },
+    example: {
+      type: 'LineString',
+      coordinates: [
+        [-68.13, -16.5],
+        [-68.12, -16.51],
+      ],
+    },
     description:
       '`LineString` GeoJSON, **`[lng, lat]`**. La distancia NO se manda: se mide sobre esta ' +
       'geometria, porque un numero escrito a mano que no cuadre con el trazado deja una ' +
@@ -95,7 +93,13 @@ export class CreateRouteDto extends RouteFieldsDto {
   declare city: string;
 
   @ApiProperty({
-    example: { type: 'LineString', coordinates: [[-68.13, -16.5], [-68.12, -16.51]] },
+    example: {
+      type: 'LineString',
+      coordinates: [
+        [-68.13, -16.5],
+        [-68.12, -16.51],
+      ],
+    },
   })
   @IsObject()
   declare geoJson: unknown;
@@ -164,7 +168,13 @@ export class RouteSummaryDto {
 export class RouteDetailDto extends RouteSummaryDto {
   @ApiProperty({
     description: '`LineString` GeoJSON ya simplificado para dibujar en el movil',
-    example: { type: 'LineString', coordinates: [[-68.13, -16.5], [-68.12, -16.51]] },
+    example: {
+      type: 'LineString',
+      coordinates: [
+        [-68.13, -16.5],
+        [-68.12, -16.51],
+      ],
+    },
   })
   geoJson!: unknown;
 }

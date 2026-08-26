@@ -110,6 +110,17 @@ export class MarathonSummaryDto {
   @ApiProperty({ nullable: true })
   coverUrl!: string | null;
 
+  @ApiProperty({
+    nullable: true,
+    description:
+      'TEMPORAL — QR de cobro del organizador. `null` = esta carrera no admite el metodo ' +
+      '`qr_manual`, asi que la app no debe ofrecerlo. Ver `docs/pago-qr-manual.md`.',
+  })
+  paymentQrUrl!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'TEMPORAL — instrucciones junto al QR.' })
+  paymentQrInstructions!: string | null;
+
   @ApiProperty({ enum: MarathonRegistrationStatus, description: 'Derivado al leer' })
   registrationStatus!: MarathonRegistrationStatus;
 

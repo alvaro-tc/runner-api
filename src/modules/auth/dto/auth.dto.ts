@@ -7,6 +7,7 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -46,12 +47,40 @@ export class DeviceDto {
   platform?: string;
 }
 
+/**
+ * Alta de cuenta. Hace falta **email o CI**, no los dos.
+ *
+ * El email es opcional porque hay corredores que no tienen o no lo quieren dar,
+ * y la inscripcion no puede depender de eso. La CI es la otra credencial: es lo
+ * que permite entrar en la app a quien se dio de alta desde la web, y lo que
+ * cruza un pago hecho en la web con la cuenta que ya existia en la app.
+ *
+ * `@ValidateIf` es lo que hace que "uno de los dos" sea una regla de verdad y
+ * no un comentario: sin CI, el email pasa a ser obligatorio y al reves.
+ */
 export class RegisterDto extends DeviceDto {
-  @ApiProperty({ example: 'runner@test.com' })
+  @ApiPropertyOptional({
+    example: 'runner@test.com',
+    description: 'Opcional si mandas `ci`.',
+  })
+  @ValidateIf((o: RegisterDto) => !o.ci || o.email !== undefined)
   @IsEmail({}, { message: 'El email no tiene un formato valido' })
   @MaxLength(254)
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
-  email!: string;
+  email?: string;
+
+  @ApiPropertyOptional({
+    example: '1234567 LP',
+    description:
+      'Cedula de identidad. Opcional si mandas `email`. Se guarda normalizada ' +
+      '(sin espacios ni guiones, en mayusculas), asi que `1234567 lp` y `1234567-LP` son la misma.',
+  })
+  @ValidateIf((o: RegisterDto) => !o.email || o.ci !== undefined)
+  @IsString()
+  @IsNotEmpty({ message: 'Hace falta un email o una CI' })
+  @MaxLength(40)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  ci?: string;
 
   @ApiProperty({ example: 'Test1234!', minLength: 8 })
   @IsString()
@@ -68,12 +97,23 @@ export class RegisterDto extends DeviceDto {
   name!: string;
 }
 
+/**
+ * Un solo campo para las dos credenciales.
+ *
+ * Se decide que es por el `@`, no preguntando a la base. Dos campos ("email" y
+ * "CI") obligarian al usuario a saber con cual se dio de alta, que es
+ * exactamente lo que no recuerda.
+ */
 export class LoginDto extends DeviceDto {
-  @ApiProperty({ example: 'runner@test.com' })
-  @IsEmail({}, { message: 'El email no tiene un formato valido' })
+  @ApiProperty({
+    example: 'runner@test.com',
+    description: 'Email o CI. Con `@` se trata como email; sin `@`, como CI.',
+  })
+  @IsString()
+  @IsNotEmpty()
   @MaxLength(254)
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
-  email!: string;
+  identifier!: string;
 
   @ApiProperty({ example: 'Test1234!' })
   @IsString()
@@ -121,6 +161,29 @@ export class ResetPasswordDto {
   password!: string;
 }
 
+/**
+ * Cambio de contrasena con sesion abierta.
+ *
+ * Existe por el alta desde la web: ahi la contrasena inicial **es la CI**, que
+ * la sabe cualquiera que vea el documento. `mustChangePassword` obliga a pasar
+ * por aqui antes de nada. Pide la actual aunque haya token: un telefono
+ * desbloqueado un minuto no puede convertirse en un cambio de credenciales.
+ */
+export class ChangePasswordDto {
+  @ApiProperty({ description: 'La contrasena actual. En un alta desde la web, la CI.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  currentPassword!: string;
+
+  @ApiProperty({ example: 'NuevaClave123', minLength: 8 })
+  @IsString()
+  @MinLength(8, { message: PASSWORD_MESSAGE })
+  @MaxLength(128)
+  @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
+  newPassword!: string;
+}
+
 // ─── Respuestas (solo para que Swagger las documente) ──────────────────────
 
 export class TokenPairDto {
@@ -138,14 +201,24 @@ export class AuthUserDto {
   @ApiProperty()
   id!: string;
 
-  @ApiProperty()
-  email!: string;
+  @ApiProperty({ nullable: true, description: 'Null si la cuenta se dio de alta solo con CI.' })
+  email!: string | null;
+
+  @ApiProperty({ nullable: true, example: '1234567LP', description: 'CI normalizada.' })
+  ci!: string | null;
 
   @ApiProperty()
   name!: string;
 
   @ApiProperty({ enum: ['runner', 'admin'] })
   role!: string;
+
+  @ApiProperty({
+    description:
+      'True cuando la contrasena la puso otro (alta desde la web: usuario CI, contrasena CI). ' +
+      'La app tiene que mandar al usuario a cambiarla antes de dejarle usar nada.',
+  })
+  mustChangePassword!: boolean;
 
   @ApiProperty({
     nullable: true,
