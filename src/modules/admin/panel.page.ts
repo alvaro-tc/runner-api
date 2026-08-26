@@ -159,11 +159,11 @@ function tabla(columnas, filas, celda) {
 
 // ─── Sesión ──────────────────────────────────────────────────────────────────
 
-async function entrar(email, password) {
+async function entrar(identifier, password) {
   const res = await fetch(API + '/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, deviceId: 'admin-panel' }),
+    body: JSON.stringify({ identifier, password, deviceId: 'admin-panel' }),
   });
   const cuerpo = await res.json();
   if (!res.ok) throw new Error(cuerpo?.error?.message || 'No se pudo entrar');
