@@ -1,9 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { camposPresentes } from '../../common/utils/patch';
 import { aSlug } from '../../common/utils/slug';
+import { reencodarImagenAWebp } from '../../common/utils/image';
+import { AppConfigService } from '../../config/app-config.service';
+import { StorageService } from '../storage/storage.service';
 import { hashPassword } from '../auth/password';
 import { UsersService } from '../users/users.service';
 import { calcularServiceFee } from '../pricing/service-fee';
@@ -115,6 +119,8 @@ export class AdminService {
     private readonly races: RacesService,
     private readonly routes: RoutesService,
     private readonly users: UsersService,
+    private readonly storage: StorageService,
+    private readonly config: AppConfigService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -651,6 +657,42 @@ export class AdminService {
     return this.detalleMaraton(marathonId);
   }
 
+  /**
+   * Sube el QR de cobro de una maraton y lo deja listo para el checkout.
+   *
+   * Reemplaza el campo de texto libre: pedirle al organizador que suba la
+   * imagen a otro sitio y pegue la URL es un paso de mas que solo sirve para
+   * que alguien la pegue mal. El archivo se reencoda a WebP y queda con la
+   * misma clave de storage que cualquier otro binario de la API.
+   */
+  async subirQr(marathonId: string, archivo: { buffer: Buffer; size: number }) {
+    await this.buscarMaraton(marathonId);
+
+    const maximo = this.config.get('PAYMENT_PROOF_MAX_BYTES');
+    if (archivo.size > maximo) {
+      throw new AppException(
+        ErrorCode.FILE_TOO_LARGE,
+        `La imagen supera el maximo de ${Math.round(maximo / 1024 / 1024)} MB`,
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+
+    const webp = await reencodarImagenAWebp(archivo.buffer, {
+      maxWidthPx: this.config.get('PAYMENT_PROOF_MAX_WIDTH_PX'),
+    });
+    const clave = `marathons/qr/${marathonId}/${randomUUID()}.webp`;
+    await this.storage.save(clave, webp);
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: { paymentQrUrl: clave },
+    });
+
+    this.logger.log(`QR de cobro actualizado para la maraton ${marathonId}`);
+
+    return this.detalleMaraton(marathonId);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   //  Recorridos preestablecidos
   // ─────────────────────────────────────────────────────────────────────────
@@ -747,7 +789,9 @@ export class AdminService {
       registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
       coverUrl: maraton.coverUrl,
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
-      paymentQrUrl: maraton.paymentQrUrl,
+      // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
+      // en una vista previa y una clave de storage relativa no le sirve.
+      paymentQrUrl: this.storage.publicUrl(maraton.paymentQrUrl),
       paymentQrInstructions: maraton.paymentQrInstructions,
       schedule: maraton.schedule,
       includes: maraton.includes,

@@ -11,10 +11,23 @@ import {
   Put,
   Query,
   Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiOperation,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
+import { AppException } from '../../common/errors/app.exception';
+import { ErrorCode } from '../../common/errors/error-codes';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -247,6 +260,31 @@ export class AdminController {
   })
   editarMaraton(@Param('id') id: string, @Body() dto: UpdateMarathonDto) {
     return this.admin.actualizarMaraton(id, dto);
+  }
+
+  @Post('marathons/:id/qr')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } },
+  })
+  @ApiOperation({
+    summary: 'Subir el QR de cobro de la maratón',
+    description:
+      'Reemplaza el `paymentQrUrl` actual. Es el mismo QR para todos los inscritos que elijan ' +
+      'pagar por QR: lo que distingue un cobro de otro es la glosa, no la imagen.',
+  })
+  @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
+  subirQr(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Falta el archivo en el campo `file`',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.admin.subirQr(id, file);
   }
 
   @Delete('marathons/:id')

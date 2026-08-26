@@ -125,12 +125,20 @@ bloquearía esa baja.
 
 ## 5. Configuración
 
-Por maratón (`PUT /admin/marathons/:id`, o el formulario del panel):
+Por maratón:
 
 | Campo | Qué es |
 |---|---|
-| `paymentQrUrl` | URL absoluta o clave de storage del QR del organizador. **Sin esto la carrera no admite `qr_manual`** y el checkout responde `QR_NOT_CONFIGURED` |
-| `paymentQrInstructions` | Texto libre que se pinta junto al QR |
+| `paymentQrUrl` | Clave de storage (o URL absoluta) del QR del organizador. **Sin esto la carrera no admite `qr_manual`** y el checkout responde `QR_NOT_CONFIGURED` |
+| `paymentQrInstructions` | Texto libre que se pinta junto al QR, editable en `PUT /admin/marathons/:id` o el formulario del panel |
+
+`paymentQrUrl` se carga subiendo la imagen: `POST /admin/marathons/:id/qr`
+(multipart, campo `file`), o desde el panel, en el bloque "QR de cobro" de la
+edición de la maratón. Se reencoda a WebP igual que un comprobante o un avatar
+(`reencodarImagenAWebp`, `common/utils/image.ts`) y queda con su propia clave
+de storage: subir uno nuevo no pisa el archivo anterior, solo el puntero. El
+seed deja un QR genérico por maratón (`sembrarQrDeCobro`) para que el flujo se
+pueda probar sin que el organizador haya subido el suyo todavía.
 
 `GET /marathons/:slug` los devuelve, para que la app sepa si puede ofrecer el
 método en vez de prometer un pago imposible.

@@ -131,6 +131,25 @@ async function api(ruta, opciones = {}) {
   return cuerpo?.data;
 }
 
+/** Como api(), pero para multipart: el navegador pone el boundary solo. */
+async function subirArchivo(ruta, file) {
+  const cuerpo = new FormData();
+  cuerpo.append('file', file);
+
+  const res = await fetch(API + ruta, {
+    method: 'POST',
+    headers: token ? { Authorization: 'Bearer ' + token } : {},
+    body: cuerpo,
+  });
+
+  if (res.status === 401) { salir(); throw new Error('Sesión caducada'); }
+
+  const respuesta = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(respuesta?.error?.message || ('Error ' + res.status));
+
+  return respuesta?.data;
+}
+
 function tabla(columnas, filas, celda) {
   if (!filas.length) return '<p class="muted">No hay nada que mostrar.</p>';
   const cabecera = columnas.map((c) => '<th>' + esc(c) + '</th>').join('');
@@ -453,7 +472,6 @@ async function vistaEditorMaraton(id) {
       '</div>' +
       '<div class="row">' +
         campo('coverUrl', 'Afiche promocional (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
-        campo('paymentQrUrl', 'QR de cobro (URL)', v(m?.paymentQrUrl), 'style="min-width:280px"') +
         campo(
           'paymentQrInstructions',
           'Instrucciones del QR',
@@ -467,6 +485,7 @@ async function vistaEditorMaraton(id) {
       (m ? ' <button class="act" type="button" data-accion="borrarMaraton">Borrar maratón</button>' : '') +
       '<span class="muted"> · el precio va en centavos: Bs 250,00 son 25000</span>' +
     '</form>' +
+    (m ? bloqueQr(m) : '') +
     (m ? bloqueCategorias(m) + bloqueExtras(m) : '<p class="muted">Las categorías y los adicionales se cargan una vez creada la maratón.</p>');
 
   $('#marForm').addEventListener('submit', async (ev) => {
@@ -495,7 +514,6 @@ async function vistaEditorMaraton(id) {
       currency: texto('currency') || undefined,
       registrationClosesAt: enUtc('registrationClosesAt'),
       coverUrl: texto('coverUrl') || null,
-      paymentQrUrl: texto('paymentQrUrl') || null,
       paymentQrInstructions: texto('paymentQrInstructions') || null,
       description: texto('description') || null,
       includes: texto('includes') ? texto('includes').split(',').map((x) => x.trim()).filter(Boolean) : [],
@@ -519,6 +537,20 @@ async function vistaEditorMaraton(id) {
       }
     } catch (e) { flash(e.message, true); }
   });
+
+  const qrInput = $('#qrFile');
+  if (qrInput) {
+    qrInput.addEventListener('change', async () => {
+      const file = qrInput.files[0];
+      if (!file) return;
+
+      try {
+        await subirArchivo('/admin/marathons/' + m.id + '/qr', file);
+        flash('QR actualizado');
+        pintar(vistaEditorMaraton, m.id);
+      } catch (e) { flash(e.message, true); }
+    });
+  }
 
   manejadorClic = async (ev) => {
     const b = ev.target.closest('button[data-accion]');
@@ -590,6 +622,27 @@ async function vistaEditorMaraton(id) {
 function valorONulo(selector) {
   const valor = $(selector).value.trim();
   return valor === '' ? null : Number(valor);
+}
+
+/**
+ * QR de cobro de la maratón. Ver docs/pago-qr-manual.md.
+ *
+ * El campo de texto libre se cambió por una subida directa: pedirle al
+ * organizador que suba la imagen a otro sitio y pegue la URL es un paso de
+ * más que solo sirve para que alguien la pegue mal. El seed ya deja un QR
+ * genérico por maratón; esto es lo que lo reemplaza por el real.
+ */
+function bloqueQr(m) {
+  return (
+    '<div class="card">' +
+      '<h3>QR de cobro</h3>' +
+      (m.paymentQrUrl
+        ? '<img src="' + esc(m.paymentQrUrl) + '" alt="QR de cobro" style="width:180px;height:180px;object-fit:contain;border:1px solid #ddd;border-radius:8px">'
+        : '<p class="muted">Sin QR cargado todavía: se usa el genérico del seed hasta que subas uno.</p>') +
+      '<div class="row"><label>Reemplazar QR<input id="qrFile" type="file" accept="image/*"></label></div>' +
+      '<span class="muted">Se usa para todos los inscritos que paguen por QR en esta maratón.</span>' +
+    '</div>'
+  );
 }
 
 const GENEROS = ['', 'male', 'female', 'other', 'unspecified'];
