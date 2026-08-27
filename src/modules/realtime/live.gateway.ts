@@ -10,7 +10,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../database/prisma.service';
 import { TokenService } from '../auth/token.service';
-import type { PosicionEnVivo } from './live-state';
+import type { EstadoDeMaraton, PosicionEnVivo } from './live-state';
 
 /** Namespace del seguimiento en vivo. Separado del resto por si algun dia lo hay. */
 export const NAMESPACE_LIVE = '/live';
@@ -128,6 +128,23 @@ export class LiveGateway implements OnGatewayConnection {
     }
 
     this.server.to(salaDeMaraton(marathonId)).emit('runner:position', payload);
+  }
+
+  /**
+   * Avisa a la sala de que la carrera arranco o termino.
+   *
+   * Lo escuchan los dos lados por el mismo canal: el panel, para pintar el
+   * estado, y el movil del corredor, que es lo que hace que la pantalla de
+   * carrera se abra sola. Va por la sala de la maraton y no por un canal propio
+   * porque quien mira esa maraton es exactamente quien tiene que enterarse.
+   */
+  emitirEstado(marathonId: string, estado: EstadoDeMaraton): void {
+    if (!this.server) {
+      this.logger.debug('Gateway sin servidor: no se publica el estado');
+      return;
+    }
+
+    this.server.to(salaDeMaraton(marathonId)).emit('marathon:state', estado);
   }
 }
 

@@ -3,6 +3,7 @@ import { PricingModule } from '../pricing/pricing.module';
 import { PaymentsModule } from '../payments/payments.module';
 import { RacesModule } from '../races/races.module';
 import { RoutesModule } from '../routes/routes.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { UsersModule } from '../users/users.module';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
@@ -25,7 +26,14 @@ import { PanelController } from './panel.controller';
  * ni una accion.
  */
 @Module({
-  imports: [PricingModule, PaymentsModule, RacesModule, RoutesModule, UsersModule],
+  imports: [
+    PricingModule,
+    PaymentsModule,
+    RacesModule,
+    RoutesModule,
+    UsersModule,
+    RealtimeModule,
+  ],
   controllers: [AdminController, PanelController],
   providers: [AdminService],
 })

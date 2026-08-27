@@ -135,3 +135,38 @@ function redondear(valor: number): number {
 function comoPunto(p: PuntoLive): Punto {
   return { ...p, altitude: null, accuracyMeters: null };
 }
+
+/**
+ * Estado de largada de una maraton, tal como viaja por el socket.
+ *
+ * Se manda entero —y no solo "arranco"— porque el cliente puede conectarse a
+ * mitad: con las dos fechas puede decidir si abre la pantalla de carrera, si
+ * muestra el resumen o si no hace nada, sin preguntar por REST.
+ */
+export interface EstadoDeMaraton {
+  marathonId: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+/**
+ * Foto de quien va por donde, ahora mismo.
+ *
+ * Es lo que necesita el panel al **abrir** el mapa: sin esto vería un mapa
+ * vacío hasta que a cada corredor le tocara su siguiente emisión, que con la
+ * ventana de cinco segundos son cinco segundos de nada y con un corredor que
+ * perdió cobertura, minutos.
+ */
+export function foto(
+  estados: Map<string, EstadoCorredor>,
+  marathonId: string,
+): PosicionEnVivo[] {
+  const posiciones: PosicionEnVivo[] = [];
+
+  for (const estado of estados.values()) {
+    if (estado.marathonId !== marathonId || !estado.ultimoPunto) continue;
+    posiciones.push(aPayload(estado, estado.ultimoPunto));
+  }
+
+  return posiciones;
+}

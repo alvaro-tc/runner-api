@@ -31,6 +31,8 @@ const MARATON_DE_LA_CARRERA = {
   distanceMeters: true,
   coverUrl: true,
   kitPickup: true,
+  liveStartedAt: true,
+  liveFinishedAt: true,
 } as const;
 
 const INSCRIPCION_DE_LA_CARRERA = {
@@ -510,6 +512,10 @@ export class RacesService {
         ...carrera.marathon,
         startsAt: carrera.marathon.startsAt.toISOString(),
         coverUrl: this.storage.publicUrl(carrera.marathon.coverUrl),
+        // La largada real. Con esto la app sabe, al abrirse, si tiene que estar
+        // en la pantalla de carrera aunque se haya perdido el aviso del socket.
+        liveStartedAt: carrera.marathon.liveStartedAt?.toISOString() ?? null,
+        liveFinishedAt: carrera.marathon.liveFinishedAt?.toISOString() ?? null,
       },
       bibNumber: carrera.bibNumber,
       categoryName: carrera.category?.name ?? null,

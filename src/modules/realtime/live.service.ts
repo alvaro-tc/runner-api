@@ -5,10 +5,12 @@ import { LiveGateway } from './live.gateway';
 import {
   aPayload,
   acumular,
+  foto,
   debeEmitir,
   nuevoEstado,
   podar,
   type EstadoCorredor,
+  type EstadoDeMaraton,
   type PuntoLive,
 } from './live-state';
 
@@ -75,6 +77,28 @@ export class LiveService {
         'No se pudo publicar la posicion en vivo; el lote se guardo igual',
       );
     }
+  }
+
+  /**
+   * Anuncia que la maraton arranco o termino.
+   *
+   * La llama el panel de admin. Al terminar se olvidan los corredores de esa
+   * carrera: sus estados ya no valen para nada y quedarse con ellos es guardar
+   * la ultima posicion conocida de un monton de gente sin motivo.
+   */
+  anunciar(estado: EstadoDeMaraton): void {
+    this.gateway.emitirEstado(estado.marathonId, estado);
+
+    if (!estado.finishedAt) return;
+
+    for (const [sessionId, corredor] of this.estados) {
+      if (corredor.marathonId === estado.marathonId) this.estados.delete(sessionId);
+    }
+  }
+
+  /** Donde va cada corredor de esa maraton ahora mismo. */
+  posiciones(marathonId: string) {
+    return foto(this.estados, marathonId);
   }
 
   /** Olvida a un corredor. La llama el cierre o el descarte de la sesion. */

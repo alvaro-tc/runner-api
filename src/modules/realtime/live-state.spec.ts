@@ -2,6 +2,7 @@ import {
   aPayload,
   acumular,
   debeEmitir,
+  foto,
   nuevoEstado,
   podar,
   type EstadoCorredor,
@@ -102,5 +103,23 @@ describe('aPayload', () => {
     expect(payload.bib).toBe('A-042');
     expect(payload.t).toBe(ultimo.recordedAt.toISOString());
     expect(payload.distanceMeters).toBe(100);
+  });
+});
+
+describe('foto', () => {
+  it('solo los de esa maraton, y solo los que ya mandaron algo', () => {
+    const conPunto = nuevoEstado('m1', 'A-1');
+    acumular(conPunto, recta(2, 10));
+    const otra = nuevoEstado('m2', 'B-1');
+    acumular(otra, recta(2, 10));
+
+    const estados = new Map<string, EstadoCorredor>([
+      ['s1', conPunto],
+      ['s2', otra],
+      // Sesion abierta que todavia no mando ni un punto: no tiene donde pintarse.
+      ['s3', nuevoEstado('m1', 'A-2')],
+    ]);
+
+    expect(foto(estados, 'm1').map((p) => p.bib)).toEqual(['A-1']);
   });
 });

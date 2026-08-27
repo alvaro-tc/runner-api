@@ -454,6 +454,13 @@ model Marathon {
   /// Texto libre que se pinta junto al QR: a que cuenta llega, que glosa poner.
   paymentQrInstructions String?
 
+  /// Cuando el admin dio la largada desde el panel. Null = todavia no arranco.
+  /// Es lo que pone en marcha el movil de cada corredor: no se deriva de
+  /// `startsAt` porque una largada se retrasa y `startsAt` es lo programado.
+  liveStartedAt  DateTime?
+  /// Cuando el admin corto la carrera. Con esto puesto ya nadie esta corriendo.
+  liveFinishedAt DateTime?
+
   publishedAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -472,6 +479,7 @@ model Marathon {
   @@index([registrationStatus, startsAt])
   @@index([city])
   @@index([routeId])
+  @@index([liveStartedAt])
   @@map("marathons")
 }
 

@@ -366,6 +366,44 @@ export class AdminController {
     return this.admin.publicar(id, false);
   }
 
+  // ─── Largada en vivo ─────────────────────────────────────────────────────
+
+  @Post('marathons/:id/start')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Dar la largada',
+    description:
+      'Pone `liveStartedAt` con la hora del **servidor** y lo anuncia por el socket: es lo ' +
+      'que hace que el móvil de cada inscrito abra la pantalla de carrera. Llamarlo dos ' +
+      'veces no reinicia nada, la primera hora manda.',
+  })
+  largar(@Param('id') id: string) {
+    return this.admin.largar(id, true);
+  }
+
+  @Post('marathons/:id/finish')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Cortar la carrera',
+    description:
+      'Cierra la ventana en vivo: los móviles pasan al resumen con sus estadísticas y el ' +
+      'mapa del panel deja de recibir posiciones.',
+  })
+  finalizar(@Param('id') id: string) {
+    return this.admin.largar(id, false);
+  }
+
+  @Get('marathons/:id/live')
+  @ApiOperation({
+    summary: 'Foto de dónde va cada corredor ahora mismo',
+    description:
+      'Lo que el mapa necesita al **abrirse**; a partir de ahí las posiciones llegan por el ' +
+      'socket. Solo dorsal y coordenada: nunca el nombre ni el id de la persona.',
+  })
+  enVivo(@Param('id') id: string) {
+    return this.admin.posicionesEnVivo(id);
+  }
+
   @Post('marathons/:id/close-registrations')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

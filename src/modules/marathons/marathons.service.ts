@@ -35,6 +35,8 @@ const CAMPOS_RESUMEN = {
   capacity: true,
   slotsTaken: true,
   registrationClosesAt: true,
+  liveStartedAt: true,
+  liveFinishedAt: true,
 } as const;
 
 type FilaResumen = Prisma.MarathonGetPayload<{ select: typeof CAMPOS_RESUMEN }>;
@@ -269,6 +271,11 @@ export class MarathonsService {
       slotsTaken: maraton.slotsTaken,
       slotsAvailable: cuposDisponibles(maraton),
       registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
+      // La largada de verdad, la que dio el admin. Es lo que mira el movil del
+      // inscrito para saber si tiene que estar corriendo ahora mismo; `startsAt`
+      // es lo programado y casi nunca coincide.
+      liveStartedAt: maraton.liveStartedAt?.toISOString() ?? null,
+      liveFinishedAt: maraton.liveFinishedAt?.toISOString() ?? null,
     };
   }
 

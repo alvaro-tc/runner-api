@@ -16,6 +16,7 @@ import { resolverEstado } from '../marathons/registration-status';
 import { PaymentsService } from '../payments/payments.service';
 import { RacesService } from '../races/races.service';
 import { RoutesService } from '../routes/routes.service';
+import { LiveService } from '../realtime/live.service';
 import {
   MarathonRegistrationStatus,
   PaymentStatus,
@@ -118,6 +119,7 @@ export class AdminService {
     private readonly payments: PaymentsService,
     private readonly races: RacesService,
     private readonly routes: RoutesService,
+    private readonly live: LiveService,
     private readonly users: UsersService,
     private readonly storage: StorageService,
     private readonly config: AppConfigService,
@@ -248,6 +250,83 @@ export class AdminService {
       data: { publishedAt: publicada ? new Date() : null },
       select: { id: true, slug: true, name: true, publishedAt: true },
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Largada en vivo
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Da la largada, o la corta.
+   *
+   * Es lo que pone en marcha el movil de cada corredor, asi que la fecha la
+   * pone el **servidor** y no el cliente: si cada telefono arrancara con su
+   * propio reloj, dos corredores del mismo pelotón tendrian tiempos oficiales
+   * distintos por el desfase de sus relojes.
+   *
+   * Largar dos veces no reinicia nada: la primera fecha manda. Un segundo clic
+   * en "iniciar" —el nervioso, el del dedo gordo en la linea de salida— no
+   * puede borrarle diez minutos de carrera a todo el mundo.
+   */
+  async largar(marathonId: string, arrancar: boolean) {
+    const maraton = await this.buscarMaraton(marathonId);
+
+    if (arrancar && maraton.liveFinishedAt) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Esa maraton ya termino',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    if (!arrancar && !maraton.liveStartedAt) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Esa maraton todavia no arranco',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const ahora = new Date();
+    const actualizada = await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: arrancar
+        ? { liveStartedAt: maraton.liveStartedAt ?? ahora }
+        : { liveFinishedAt: maraton.liveFinishedAt ?? ahora },
+      select: { id: true, slug: true, name: true, liveStartedAt: true, liveFinishedAt: true },
+    });
+
+    const estado = {
+      marathonId: actualizada.id,
+      startedAt: actualizada.liveStartedAt?.toISOString() ?? null,
+      finishedAt: actualizada.liveFinishedAt?.toISOString() ?? null,
+    };
+
+    // Despues de guardar: si el socket se cayo, la carrera arranco igual y el
+    // movil se entera al preguntar por REST.
+    this.live.anunciar(estado);
+    this.logger.log(`Maraton ${actualizada.slug} ${arrancar ? 'largada' : 'finalizada'}`);
+
+    return { ...estado, slug: actualizada.slug, name: actualizada.name };
+  }
+
+  /**
+   * Donde va cada corredor ahora mismo.
+   *
+   * Sale de memoria y no de la base: es lo ultimo que llego por la ingesta, que
+   * es exactamente lo que el mapa quiere. Consultar `positions` seria un
+   * `DISTINCT ON` sobre una tabla particionada de millones de filas cada vez que
+   * el panel refresca.
+   */
+  async posicionesEnVivo(marathonId: string) {
+    const maraton = await this.buscarMaraton(marathonId);
+
+    return {
+      marathonId: maraton.id,
+      startedAt: maraton.liveStartedAt?.toISOString() ?? null,
+      finishedAt: maraton.liveFinishedAt?.toISOString() ?? null,
+      runners: this.live.posiciones(marathonId),
+    };
   }
 
   /**
@@ -471,6 +550,10 @@ export class AdminService {
       resolved: resolverEstado(m),
       registrations: m._count.registrations,
       feeOverride: m.serviceFeeConfig,
+      // El panel pinta con esto el estado en vivo de la lista sin abrir cada
+      // carrera: hay tres, y saber cual esta corriendo es lo primero que se mira.
+      liveStartedAt: m.liveStartedAt?.toISOString() ?? null,
+      liveFinishedAt: m.liveFinishedAt?.toISOString() ?? null,
     }));
   }
 
@@ -802,6 +885,8 @@ export class AdminService {
       routeId: maraton.routeId,
       published: maraton.publishedAt !== null,
       publishedAt: maraton.publishedAt?.toISOString() ?? null,
+      liveStartedAt: maraton.liveStartedAt?.toISOString() ?? null,
+      liveFinishedAt: maraton.liveFinishedAt?.toISOString() ?? null,
       registrations: maraton._count.registrations,
       feeOverride: maraton.serviceFeeConfig,
       categories: maraton.categories,
