@@ -480,6 +480,21 @@ async function vistaEditorMaraton(id) {
         campo('includes', 'Incluye (separado por comas)', (m?.includes || []).join(', '), 'style="min-width:280px"') +
       '</div>' +
       '<div class="row"><label style="flex:1">Descripción<textarea id="description" style="min-height:80px">' + esc(v(m?.description)) + '</textarea></label></div>' +
+      // TEMPORAL - cobro por QR manual. Ver docs/pago-qr-manual.md.
+      // Es TEXTO y no una imagen: la app dibuja el código ella misma, así que
+      // sale nítido a cualquier tamaño y el checkout no arrastra un PNG.
+      // Sin esto la maratón NO admite el pago por QR: se dice aquí y no en un
+      // error del corredor tres pantallas más tarde.
+      '<div class="row"><label style="flex:1">Texto del QR de cobro' +
+        '<textarea id="paymentQrPayload" style="min-height:80px" placeholder="Pega aquí el contenido del QR que exporta tu banca móvil">' +
+          esc(v(m?.paymentQrPayload)) +
+        '</textarea></label></div>' +
+      '<span class="muted">' +
+        (m && m.paymentQrPayload
+          ? 'Cargado: esta maratón admite el pago por QR.'
+          : 'Vacío: esta maratón NO admite el pago por QR y el checkout lo rechaza.') +
+        ' · Exportá el QR desde tu banca móvil y pegá el texto que devuelve.' +
+      '</span>' +
       '<button class="act" type="submit">' + (m ? 'Guardar cambios' : 'Crear maratón') + '</button>' +
       (m ? ' <button class="act" type="button" data-accion="borrarMaraton">Borrar maratón</button>' : '') +
       '<span class="muted"> · el precio va en centavos: Bs 250,00 son 25000</span>' +
@@ -513,6 +528,7 @@ async function vistaEditorMaraton(id) {
       currency: texto('currency') || undefined,
       registrationClosesAt: enUtc('registrationClosesAt'),
       paymentQrInstructions: texto('paymentQrInstructions') || null,
+      paymentQrPayload: texto('paymentQrPayload') || null,
       description: texto('description') || null,
       includes: texto('includes') ? texto('includes').split(',').map((x) => x.trim()).filter(Boolean) : [],
       published: $('#published').value === 'true',
@@ -660,7 +676,9 @@ function bloqueAfiche(m) {
 function bloqueQr(m) {
   return (
     '<div class="card">' +
-      '<h3>QR de cobro</h3>' +
+      '<h3>QR de cobro (imagen, respaldo)</h3>' +
+      '<p class="muted">Lo que usa la app es el <b>texto del QR</b> de arriba. Esta imagen es solo ' +
+        'el respaldo de las maratones que ya la tenían subida.</p>' +
       (m.paymentQrUrl
         ? '<img src="' + esc(m.paymentQrUrl) + '" alt="QR de cobro" style="width:180px;height:180px;object-fit:contain;border:1px solid #ddd;border-radius:8px">'
         : '<p class="muted">Sin QR cargado todavía: se usa el genérico del seed hasta que subas uno.</p>') +

@@ -373,6 +373,33 @@ export class PaymentsService {
     return reembolsados;
   }
 
+  /**
+   * Cierra los cobros que quedaron **abiertos** en una inscripcion cancelada.
+   *
+   * Sin esto, un cobro por QR sigue `pending` sobre una inscripcion muerta: el
+   * corredor todavia puede subir un comprobante y un organizador todavia puede
+   * aprobarlo, y aprobar reserva cupo y emite dorsal. Es decir, una inscripcion
+   * cancelada volveria sola a confirmada.
+   *
+   * Se cierra aqui, en el estado del cobro, y no con un `if` en cada pantalla:
+   * la subida de comprobante y la acreditacion ya exigen `pending`, asi que un
+   * solo cambio de estado tapa los dos caminos.
+   *
+   * No lanza, por lo mismo que el reembolso: cancelar tiene que funcionar.
+   */
+  async cerrarPendientesDeInscripcion(registrationId: string): Promise<number> {
+    const { count } = await this.prisma.payment.updateMany({
+      where: { registrationId, status: PaymentStatus.pending },
+      data: { status: PaymentStatus.failed, failureReason: 'cancelled_by_user' },
+    });
+
+    if (count > 0) {
+      this.logger.log(`Cerrados ${count} cobro/s pendientes de la inscripcion ${registrationId}`);
+    }
+
+    return count;
+  }
+
   private marcarReembolsado(pago: Payment, motivo: string): Promise<unknown> {
     return this.prisma.payment.updateMany({
       where: { id: pago.id, status: PaymentStatus.paid },
@@ -733,12 +760,15 @@ export class PaymentsService {
   ) {
     const maraton = await this.prisma.marathon.findUniqueOrThrow({
       where: { id: marathonId },
-      select: { paymentQrUrl: true, paymentQrInstructions: true },
+      select: { paymentQrUrl: true, paymentQrInstructions: true, paymentQrPayload: true },
     });
 
-    const qrImageUrl = this.storage.publicUrl(maraton.paymentQrUrl);
+    // El texto es lo que habilita el metodo: la app dibuja el codigo con el.
+    // La imagen viaja tambien, pero solo como respaldo de las maratones que
+    // cargaron el QR como archivo antes de que existiera el texto.
+    const qrPayload = maraton.paymentQrPayload?.trim();
 
-    if (!qrImageUrl) {
+    if (!qrPayload) {
       throw new AppException(
         ErrorCode.QR_NOT_CONFIGURED,
         'Esta carrera todavia no tiene un QR de cobro cargado',
@@ -749,7 +779,8 @@ export class PaymentsService {
     const intento = intentoDeQrManual({
       amountCents: cotizacion.totalCents,
       currency: cotizacion.currency,
-      qrImageUrl,
+      qrPayload,
+      qrImageUrl: this.storage.publicUrl(maraton.paymentQrUrl),
       instructions: maraton.paymentQrInstructions,
       reference: glosaDe(registrationId),
       ttlHoras: this.config.get('PAYMENT_PROOF_TTL_HOURS'),

@@ -510,6 +510,9 @@ export async function sembrarMaratones(): Promise<void> {
         // QR sembrado no se puede probar el flujo en local: el checkout
         // responderia `QR_NOT_CONFIGURED` y ahi se acaba la prueba.
         paymentQrUrl: await sembrarQrDeCobro(semilla.slug),
+        // Lo que la app dibuja. Es esto —y no la imagen— lo que habilita el
+        // metodo: sin payload el checkout responde `QR_NOT_CONFIGURED`.
+        paymentQrPayload: `PACEUP-COBRO|${semilla.slug}`,
         paymentQrInstructions:
           'Escanea con tu banca movil, paga el monto exacto y pon la glosa que aparece abajo ' +
           'en el detalle de la transferencia.',

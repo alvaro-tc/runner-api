@@ -907,6 +907,7 @@ export class AdminService {
       // en una vista previa y una clave de storage relativa no le sirve.
       paymentQrUrl: this.storage.publicUrl(maraton.paymentQrUrl),
       paymentQrInstructions: maraton.paymentQrInstructions,
+      paymentQrPayload: maraton.paymentQrPayload,
       schedule: maraton.schedule,
       includes: maraton.includes,
       kitPickup: maraton.kitPickup,
@@ -1181,6 +1182,7 @@ export class AdminService {
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       'paymentQrUrl',
       'paymentQrInstructions',
+      'paymentQrPayload',
     ]);
 
     if (dto.startsAt !== undefined) datos.startsAt = new Date(dto.startsAt);

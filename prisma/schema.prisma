@@ -453,6 +453,12 @@ model Marathon {
   paymentQrUrl          String?
   /// Texto libre que se pinta junto al QR: a que cuenta llega, que glosa poner.
   paymentQrInstructions String?
+  /// TEMPORAL — contenido del QR **como texto** (EMV/QR bancario, deep link o
+  /// numero de cuenta). La app lo pinta ella misma: un string viaja en bytes
+  /// donde una imagen viaja en cientos de KB, y el codigo sale nitido a
+  /// cualquier tamano. Es lo que habilita `qr_manual`; `paymentQrUrl` queda
+  /// solo como respaldo para el QR que ya estaba subido como imagen.
+  paymentQrPayload      String?
 
   /// Cuando el admin dio la largada desde el panel. Null = todavia no arranco.
   /// Es lo que pone en marcha el movil de cada corredor: no se deriva de

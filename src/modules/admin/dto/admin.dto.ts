@@ -330,6 +330,19 @@ export class MarathonFieldsDto {
   @MaxLength(500)
   paymentQrInstructions?: string | null;
 
+  @ApiPropertyOptional({
+    nullable: true,
+    example: '00020101021226580014BR.GOV.BCB.PIX...6304A1B2',
+    description:
+      'TEMPORAL — contenido del QR de cobro **como texto** (el string que devuelve la banca movil ' +
+      'al exportar el QR, un deep link o un numero de cuenta). La app lo dibuja: pesa bytes en vez ' +
+      'de KB y sale nitido a cualquier tamano. **Sin esto la carrera no admite `qr_manual`.**',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  paymentQrPayload?: string | null;
+
   @ApiPropertyOptional({ example: [{ time: '06:00', title: 'Acreditación' }] })
   @IsOptional()
   @IsArray()

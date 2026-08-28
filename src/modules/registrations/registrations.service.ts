@@ -432,6 +432,12 @@ export class RegistrationsService {
       });
     });
 
+    // Primero se cierran los cobros abiertos y despues se reembolsan los
+    // cobrados: si no, un QR pendiente se queda vivo sobre una inscripcion
+    // muerta y el organizador puede aprobar su comprobante, que reserva cupo y
+    // emite dorsal — la inscripcion cancelada volveria sola a confirmada.
+    await this.payments.cerrarPendientesDeInscripcion(actualizado.id);
+
     const reembolsados = await this.payments.reembolsarDeInscripcion(actualizado.id);
 
     this.logger.log(

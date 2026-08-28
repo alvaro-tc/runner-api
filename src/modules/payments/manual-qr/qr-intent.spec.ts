@@ -4,6 +4,7 @@ import { glosaDe, intentoDeQrManual } from './qr-intent';
 const base = {
   amountCents: 20000,
   currency: 'BOB',
+  qrPayload: '00020101021226580014BO.QR.SIMPLE5802BO6304A1B2',
   qrImageUrl: 'https://api.test/uploads/qr/lapaz.png',
   instructions: 'Poné la glosa en el detalle',
   reference: 'PU-A1B2C3',
@@ -24,12 +25,19 @@ describe('intentoDeQrManual', () => {
 
     expect(intento.method).toBe(PaymentMethod.qr_manual);
     expect(intento.methodDetails.manualQr).toEqual({
+      payload: base.qrPayload,
       imageUrl: base.qrImageUrl,
       instructions: base.instructions,
       reference: base.reference,
     });
     // El `qr` del proveedor simulado tiene que quedar vacio: son dos cosas.
     expect(intento.methodDetails.qr).toBeUndefined();
+  });
+
+  it('lleva el QR como texto aunque la maraton no tenga imagen subida', () => {
+    const intento = intentoDeQrManual({ ...base, qrImageUrl: null });
+
+    expect((intento.methodDetails.manualQr as { payload: string }).payload).toBe(base.qrPayload);
   });
 
   it('caduca, o un QR sin pagar bloquearia un cupo para siempre', () => {

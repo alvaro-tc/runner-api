@@ -50,6 +50,10 @@ const DATOS = {
   fullName: 'Alvaro Quispe',
   docId: '1234567 LP',
   phone: '+591 70000000',
+  // Las dos preguntas del CAM son obligatorias en el alta: sin ellas el paso 1
+  // responde 400 y ningun test de este archivo llega a su assert.
+  knowsCam: true,
+  acceptsDonorCall: false,
   emergencyContactName: 'Maria Quispe',
   emergencyContactPhone: '+591 70000001',
 };
@@ -137,6 +141,9 @@ describe('Registrations (e2e)', () => {
         capacity: 100,
         priceCents: 20_000,
         publishedAt: new Date(),
+        // TEMPORAL — sin texto de QR el checkout `qr_manual` responde
+        // QR_NOT_CONFIGURED. Ver `docs/pago-qr-manual.md`.
+        paymentQrPayload: 'PACEUP-COBRO|test',
         categories: {
           create: [
             { name: 'General', extraPriceCents: 0 },
@@ -411,6 +418,46 @@ describe('Registrations (e2e)', () => {
 
       const maraton = await prisma.marathon.findUnique({ where: { id: marathonId } });
       expect(maraton?.slotsTaken).toBe(0);
+    });
+
+    it('cancelar cierra el cobro por QR que quedo abierto', async () => {
+      // Otra inscripcion, esta pagando por QR: queda `pending_payment` con un
+      // cobro vivo, que es el caso que importa.
+      await limpiarInscripciones();
+      const borrador = await crearBorrador(marathonId, tokenOtro).expect(201);
+      const regId = (borrador.body as Envelope<Registro>).data.id;
+
+      await http()
+        .patch(`/api/v1/registrations/${regId}/category-extras`)
+        .set(auth(tokenOtro))
+        .send({ categoryId: categoriaId })
+        .expect(200);
+
+      const cobro = await http()
+        .post(`/api/v1/registrations/${regId}/checkout`)
+        .set(auth(tokenOtro))
+        .set('Idempotency-Key', `${marca}-qr-${(secuencia += 1)}`)
+        .send({ termsAccepted: true, method: 'qr_manual' })
+        .expect(200);
+
+      const pagoId = (cobro.body as Envelope<Checkout>).data.payment.id;
+      expect((cobro.body as Envelope<Checkout>).data.payment.status).toBe('pending');
+
+      await http().delete(`/api/v1/registrations/${regId}`).set(auth(tokenOtro)).expect(200);
+
+      // Sin esto el cobro sigue `pending`: el corredor podria subir un
+      // comprobante y un organizador aprobarlo, y aprobar reserva cupo y emite
+      // dorsal — la inscripcion cancelada volveria sola a confirmada.
+      const pago = await prisma.payment.findUnique({ where: { id: pagoId } });
+      expect(pago?.status).toBe('failed');
+      expect(pago?.failureReason).toBe('cancelled_by_user');
+
+      // Y el camino que eso cierra, comprobado de verdad y no por deduccion.
+      await http()
+        .post(`/api/v1/payments/${pagoId}/proof`)
+        .set(auth(tokenOtro))
+        .attach('file', Buffer.from('no importa el contenido'), 'captura.jpg')
+        .expect(409);
     });
 
     it('cancelar libera el bloqueo para volver a inscribirse', async () => {

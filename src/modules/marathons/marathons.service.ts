@@ -31,6 +31,7 @@ const CAMPOS_RESUMEN = {
   coverUrl: true,
   paymentQrUrl: true,
   paymentQrInstructions: true,
+  paymentQrPayload: true,
   registrationStatus: true,
   capacity: true,
   slotsTaken: true,
@@ -264,6 +265,9 @@ export class MarathonsService {
       // metodo: sin QR cargado, ofrecerlo seria prometer un pago imposible.
       paymentQrUrl: this.storage.publicUrl(maraton.paymentQrUrl),
       paymentQrInstructions: maraton.paymentQrInstructions,
+      // El QR va como texto: lo pinta la app. Es esto —y no la imagen— lo que
+      // decide si la carrera admite `qr_manual`.
+      paymentQrPayload: maraton.paymentQrPayload,
       // El campo homonimo de la BD es solo la intencion del admin; lo que sale
       // por la API es el estado resuelto.
       registrationStatus: resolverEstado(maraton, ahora),

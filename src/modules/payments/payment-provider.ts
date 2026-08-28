@@ -48,8 +48,14 @@ export interface DetalleDeBanco {
  * esta. Ver `docs/pago-qr-manual.md`.
  */
 export interface DetalleDeQrManual {
-  /** URL publica del QR de la maraton. */
-  imageUrl: string;
+  /**
+   * Contenido del QR **como texto**, tal como lo cargo el organizador. Lo
+   * dibuja el cliente: un string viaja en bytes donde una imagen viaja en
+   * cientos de KB, y el codigo sale nitido a cualquier tamano.
+   */
+  payload: string;
+  /** URL publica del QR de la maraton, si se subio como imagen. Respaldo. */
+  imageUrl: string | null;
   /** Instrucciones del organizador: a que cuenta llega, que glosa poner. */
   instructions: string | null;
   /** Glosa que identifica la inscripcion en el extracto del organizador. */

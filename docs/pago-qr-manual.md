@@ -73,7 +73,8 @@ con el mismo dorsal.
 1. `POST /auth/register` con `name`, `password` y **`ci`** (el `email` es opcional).
 2. Flujo normal de inscripción: `POST /registrations` → `PATCH …/category-extras`.
 3. `POST /registrations/:id/checkout` con `method: "qr_manual"`.
-   La respuesta trae `payment.methodDetails.manualQr` con el QR y la glosa.
+   La respuesta trae `payment.methodDetails.manualQr` con `payload` (el QR como
+   texto, que la app dibuja), `imageUrl` (respaldo, o `null`) y la glosa.
 4. `POST /payments/:id/proof` (multipart, campo `file`, `reference` opcional).
 5. La app relee `GET /payments/:id`, que ahora incluye `proof`. **No sondea**:
    al otro lado no hay un banco que responda en segundos, hay una persona que va
@@ -129,12 +130,24 @@ Por maratón:
 
 | Campo | Qué es |
 |---|---|
-| `paymentQrUrl` | Clave de storage (o URL absoluta) del QR del organizador. **Sin esto la carrera no admite `qr_manual`** y el checkout responde `QR_NOT_CONFIGURED` |
+| `paymentQrPayload` | El QR **como texto**: lo que devuelve la banca móvil al exportarlo, un deep link o un número de cuenta. **Sin esto la carrera no admite `qr_manual`** y el checkout responde `QR_NOT_CONFIGURED` |
+| `paymentQrUrl` | Clave de storage (o URL absoluta) del QR como imagen. **Respaldo**: sólo se pinta si no hay texto |
 | `paymentQrInstructions` | Texto libre que se pinta junto al QR, editable en `PUT /admin/marathons/:id` o el formulario del panel |
 
-`paymentQrUrl` se carga subiendo la imagen: `POST /admin/marathons/:id/qr`
-(multipart, campo `file`), o desde el panel, en el bloque "QR de cobro" de la
-edición de la maratón. Se reencoda a WebP igual que un comprobante o un avatar
+El QR viaja **como texto y lo dibuja el cliente**. No es una preferencia
+estética: un string son unos bytes donde un PNG son cientos de KB, el código
+sale nítido a cualquier tamaño, y se pinta aunque la conexión esté caída — que
+es exactamente lo que pasa cuando alguien saca el teléfono para pagar. La app lo
+tiñe con el violeta de marca sobre blanco en los dos temas: un QR es un
+contraste antes que un adorno, y el violeta claro del tema oscuro sobre fondo
+oscuro no lo lee ningún escáner.
+
+`paymentQrPayload` se edita en el formulario de la maratón del panel ("Texto del
+QR de cobro") o por `PUT /admin/marathons/:id`.
+
+La imagen de respaldo se sigue subiendo con `POST /admin/marathons/:id/qr`
+(multipart, campo `file`), o desde el bloque "QR de cobro (imagen, respaldo)"
+del panel. Se reencoda a WebP igual que un comprobante o un avatar
 (`reencodarImagenAWebp`, `common/utils/image.ts`) y queda con su propia clave
 de storage: subir uno nuevo no pisa el archivo anterior, solo el puntero. El
 seed deja un QR genérico por maratón (`sembrarQrDeCobro`) para que el flujo se
@@ -217,6 +230,16 @@ pendiente. Ese es un estado que nadie sabría leer después.
 Una foto de teléfono lleva las coordenadas GPS de dónde se tomó, y un comprobante
 se saca en casa.
 
+**Cancelar cierra los cobros abiertos.** `RegistrationsService.cancelar()` deja
+en `failed` (con `failureReason = cancelled_by_user`) todo cobro que siguiera
+`pending`, antes de reembolsar los que estaban `paid`. Sin eso, un QR pendiente
+sobrevive a la inscripción que lo abrió: el corredor todavía puede subir un
+comprobante y un organizador todavía puede aprobarlo, y aprobar reserva cupo y
+emite dorsal — o sea, una inscripción cancelada volvería sola a confirmada. Se
+cierra en el estado del cobro y no con un `if` en cada pantalla porque tanto la
+subida del comprobante como la acreditación ya exigen `pending`: un solo cambio
+de estado tapa los dos caminos.
+
 **El QR es el mismo para todos.** Lo que distingue un pago de otro es la glosa
 (`PU-A1B2C3`, los últimos seis del id de inscripción), que es lo que el corredor
 escribe en la transferencia y lo que el organizador cuadra contra el extracto.
@@ -238,7 +261,12 @@ El día que entre una pasarela de verdad:
 5. Quitar `qr_manual` de `PaymentMethod` y `manual` de `PaymentProviderName`
    (Postgres no borra valores de un enum: hay que recrear el tipo, y por eso el
    paso 4 no lo intenta).
-6. En la app, borrar `RacePaymentMethod.qrManual` y la pantalla de comprobante.
+6. Migración para `marathons.paymentQrPayload` (`DROP COLUMN`, ya escrita
+   comentada en `prisma/migrations/20260828120000_marathon_qr_payload/`).
+7. En la app, borrar `RacePaymentMethod.qrManual`, la pantalla de comprobante y
+   `qr_flutter` del `pubspec.yaml`, y volver a listar los métodos reales en
+   `RacePaymentMethod.offered` — que hoy es `[qrManual]` porque no hay pasarela
+   contratada.
 
 **Lo que NO se desmonta**, porque es del modelo de cuentas y no del cobro:
 `users.ci`, `users.mustChangePassword`, el email opcional y el login por

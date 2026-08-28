@@ -18,8 +18,14 @@ import type { IntentoDePago } from '../payment-provider';
 export function intentoDeQrManual(entrada: {
   amountCents: number;
   currency: string;
+  /**
+    * Contenido del QR **como texto**: lo dibuja el cliente. Es el dato que
+    * habilita el metodo; la imagen es solo un respaldo para las maratones que
+    * todavia tienen el QR subido como archivo.
+    */
+  qrPayload: string;
   /** URL publica del QR, ya resuelta por `StorageService.publicUrl()`. */
-  qrImageUrl: string;
+  qrImageUrl: string | null;
   instructions: string | null;
   /** Glosa. Se arma de la inscripcion para que sea corta y unica. */
   reference: string;
@@ -36,6 +42,7 @@ export function intentoDeQrManual(entrada: {
     method: PaymentMethod.qr_manual,
     methodDetails: {
       manualQr: {
+        payload: entrada.qrPayload,
         imageUrl: entrada.qrImageUrl,
         instructions: entrada.instructions,
         reference: entrada.reference,
