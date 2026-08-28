@@ -308,18 +308,11 @@ export class MarathonFieldsDto {
   @IsISO8601()
   registrationClosesAt?: string | null;
 
-  @ApiPropertyOptional({ nullable: true, example: '/uploads/maratones/lapaz.jpg' })
-  @IsOptional()
-  @IsString()
-  @MaxLength(500)
-  coverUrl?: string | null;
-
   @ApiPropertyOptional({
     nullable: true,
     example: 'https://cdn.cam.org.bo/qr-maraton.png',
     description:
-      'TEMPORAL — QR de cobro del organizador (URL absoluta o clave de storage, igual que ' +
-      '`coverUrl`). **Sin esto la carrera no admite el metodo `qr_manual`.** ' +
+      'TEMPORAL — QR de cobro del organizador (se sube por `POST /admin/marathons/:id/qr`). **Sin esto la carrera no admite el metodo `qr_manual`.** ' +
       'Ver `docs/pago-qr-manual.md`.',
   })
   @IsOptional()

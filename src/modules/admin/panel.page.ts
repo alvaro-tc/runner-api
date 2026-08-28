@@ -471,7 +471,6 @@ async function vistaEditorMaraton(id) {
         '</select></label>' +
       '</div>' +
       '<div class="row">' +
-        campo('coverUrl', 'Afiche promocional (URL)', v(m?.coverUrl), 'style="min-width:280px"') +
         campo(
           'paymentQrInstructions',
           'Instrucciones del QR',
@@ -485,7 +484,7 @@ async function vistaEditorMaraton(id) {
       (m ? ' <button class="act" type="button" data-accion="borrarMaraton">Borrar maratón</button>' : '') +
       '<span class="muted"> · el precio va en centavos: Bs 250,00 son 25000</span>' +
     '</form>' +
-    (m ? bloqueQr(m) : '') +
+    (m ? bloqueAfiche(m) + bloqueQr(m) : '') +
     (m ? bloqueCategorias(m) + bloqueExtras(m) : '<p class="muted">Las categorías y los adicionales se cargan una vez creada la maratón.</p>');
 
   $('#marForm').addEventListener('submit', async (ev) => {
@@ -513,7 +512,6 @@ async function vistaEditorMaraton(id) {
       priceCents: numero('priceCents'),
       currency: texto('currency') || undefined,
       registrationClosesAt: enUtc('registrationClosesAt'),
-      coverUrl: texto('coverUrl') || null,
       paymentQrInstructions: texto('paymentQrInstructions') || null,
       description: texto('description') || null,
       includes: texto('includes') ? texto('includes').split(',').map((x) => x.trim()).filter(Boolean) : [],
@@ -537,6 +535,20 @@ async function vistaEditorMaraton(id) {
       }
     } catch (e) { flash(e.message, true); }
   });
+
+  const coverInput = $('#coverFile');
+  if (coverInput) {
+    coverInput.addEventListener('change', async () => {
+      const file = coverInput.files[0];
+      if (!file) return;
+
+      try {
+        await subirArchivo('/admin/marathons/' + m.id + '/cover', file);
+        flash('Afiche actualizado');
+        pintar(vistaEditorMaraton, m.id);
+      } catch (e) { flash(e.message, true); }
+    });
+  }
 
   const qrInput = $('#qrFile');
   if (qrInput) {
@@ -632,6 +644,19 @@ function valorONulo(selector) {
  * más que solo sirve para que alguien la pegue mal. El seed ya deja un QR
  * genérico por maratón; esto es lo que lo reemplaza por el real.
  */
+function bloqueAfiche(m) {
+  return (
+    '<div class="card">' +
+      '<h3>Afiche promocional</h3>' +
+      (m.coverUrl
+        ? '<img src="' + esc(m.coverUrl) + '" alt="Afiche" style="max-width:280px;border:1px solid #ddd;border-radius:8px">'
+        : '<p class="muted">Sin afiche: la app pinta el degradado de marca en su lugar.</p>') +
+      '<div class="row"><label>Reemplazar afiche<input id="coverFile" type="file" accept="image/*"></label></div>' +
+      '<span class="muted">Se guarda en el servidor y se sirve desde /uploads; ya no se pega un enlace externo.</span>' +
+    '</div>'
+  );
+}
+
 function bloqueQr(m) {
   return (
     '<div class="card">' +

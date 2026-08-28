@@ -266,7 +266,11 @@ export class AdminController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
-    schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } },
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
   })
   @ApiOperation({
     summary: 'Subir el QR de cobro de la maratón',
@@ -285,6 +289,36 @@ export class AdminController {
     }
 
     return this.admin.subirQr(id, file);
+  }
+
+  @Post('marathons/:id/cover')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiOperation({
+    summary: 'Subir el afiche promocional de la maratón',
+    description:
+      'Reemplaza el `coverUrl` actual. La imagen queda alojada en el servidor y se sirve desde ' +
+      '`/uploads`: ya no se acepta pegar un enlace externo, que es lo que se cae justo el día ' +
+      'de la carrera.',
+  })
+  @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
+  subirAfiche(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Falta el archivo en el campo `file`',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.admin.subirAfiche(id, file);
   }
 
   @Delete('marathons/:id')

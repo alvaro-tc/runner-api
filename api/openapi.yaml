@@ -169,6 +169,31 @@ paths:
       summary: Cambia la contrasena con el token del correo
       tags:
         - auth
+  /api/v1/auth/change-password:
+    post:
+      description: >-
+        Obligatorio cuando `/auth/me` devuelve `mustChangePassword: true` (alta desde la web:
+        usuario CI, contrasena CI). Cierra **las demas** sesiones y deja viva la actual.
+      operationId: AuthController_changePassword
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordDto'
+      responses:
+        '401':
+          description: INVALID_CREDENTIALS
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Cambia la contrasena con la sesion abierta
+      tags:
+        - auth
   /api/v1/auth/me:
     get:
       operationId: AuthController_me
@@ -1133,6 +1158,178 @@ paths:
       summary: Recibe un evento del proveedor de pagos
       tags:
         - payments
+  /api/v1/payments/{id}/proof:
+    post:
+      description: >-
+        El cobro **sigue `pending`**: subir el comprobante no es haber pagado. Queda `proof.status =
+        in_review` hasta que un organizador lo apruebe, y solo entonces se emite el dorsal. Si te lo
+        rechazan, sube otro: el cobro se mantiene abierto.
+      operationId: PaymentProofController_upload
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                reference:
+                  type: string
+                  example: '00123456789'
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofDto'
+        '409':
+          description: PROOF_ALREADY_IN_REVIEW / PROOF_NOT_ALLOWED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '415':
+          description: INVALID_IMAGE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Sube el comprobante del pago por QR
+      tags:
+        - payments
+    get:
+      description: Devuelve `null` si todavia no se subio ninguno.
+      operationId: PaymentProofController_latest
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofDto'
+      security:
+        - access-token: []
+      summary: El ultimo comprobante subido para ese cobro
+      tags:
+        - payments
+  /api/v1/admin/payment-proofs:
+    get:
+      description: >-
+        Cola de trabajo: del mas viejo al mas nuevo. Cada fila trae el corredor, su CI y el monto,
+        para poder cuadrarlo contra el extracto sin abrir la imagen.
+      operationId: PaymentProofAdminController_pendientes
+      parameters:
+        - name: limit
+          required: true
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingProofDto'
+      security:
+        - access-token: []
+      summary: Comprobantes esperando revision
+      tags:
+        - admin
+  /api/v1/admin/payment-proofs/{id}/approve:
+    post:
+      description: >-
+        Acredita el cobro, reserva el cupo y emite el dorsal, por la **misma** via que el resto de
+        los metodos. Si el cupo se agoto mientras el comprobante esperaba, el comprobante vuelve a
+        la cola en vez de quedar aprobado sobre un cobro que sigue pendiente.
+      operationId: PaymentProofAdminController_aprobar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveProofDto'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofDto'
+        '409':
+          description: PROOF_ALREADY_REVIEWED / MARATHON_FULL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Dar el pago por recibido
+      tags:
+        - admin
+  /api/v1/admin/payment-proofs/{id}/reject:
+    post:
+      description: >-
+        El cobro **sigue abierto**: lo normal es una captura equivocada, y cerrarlo obligaria a
+        rehacer la inscripcion entera por una foto. El motivo lo ve el corredor.
+      operationId: PaymentProofAdminController_rechazar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectProofDto'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofDto'
+        '409':
+          description: PROOF_ALREADY_REVIEWED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Rechazar el comprobante
+      tags:
+        - admin
   /api/v1/routes:
     get:
       description: 'Sin geometria: es la lista con la que se elige uno. Ordenados por ciudad y distancia.'
@@ -2570,6 +2767,79 @@ paths:
       summary: Borrar una maratón sin inscritos
       tags:
         - admin
+  /api/v1/admin/marathons/{id}/qr:
+    post:
+      description: >-
+        Reemplaza el `paymentQrUrl` actual. Es el mismo QR para todos los inscritos que elijan pagar
+        por QR: lo que distingue un cobro de otro es la glosa, no la imagen.
+      operationId: AdminController_subirQr
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '415':
+          description: INVALID_IMAGE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Subir el QR de cobro de la maratón
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/cover:
+    post:
+      description: >-
+        Reemplaza el `coverUrl` actual. La imagen queda alojada en el servidor y se sirve desde
+        `/uploads`: ya no se acepta pegar un enlace externo, que es lo que se cae justo el día de la
+        carrera.
+      operationId: AdminController_subirAfiche
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '415':
+          description: INVALID_IMAGE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Subir el afiche promocional de la maratón
+      tags:
+        - admin
   /api/v1/admin/marathons/{id}/categories:
     post:
       operationId: AdminController_crearCategoria
@@ -2736,6 +3006,67 @@ paths:
       security:
         - access-token: []
       summary: Sacarla del catálogo
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/start:
+    post:
+      description: >-
+        Pone `liveStartedAt` con la hora del **servidor** y lo anuncia por el socket: es lo que hace
+        que el móvil de cada inscrito abra la pantalla de carrera. Llamarlo dos veces no reinicia
+        nada, la primera hora manda.
+      operationId: AdminController_largar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Dar la largada
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/finish:
+    post:
+      description: >-
+        Cierra la ventana en vivo: los móviles pasan al resumen con sus estadísticas y el mapa del
+        panel deja de recibir posiciones.
+      operationId: AdminController_finalizar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Cortar la carrera
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/live:
+    get:
+      description: >-
+        Lo que el mapa necesita al **abrirse**; a partir de ahí las posiciones llegan por el socket.
+        Solo dorsal y coordenada: nunca el nombre ni el id de la persona.
+      operationId: AdminController_enVivo
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Foto de dónde va cada corredor ahora mismo
       tags:
         - admin
   /api/v1/admin/marathons/{id}/close-registrations:
@@ -3042,6 +3373,128 @@ paths:
       summary: Ponerle una contraseña nueva a alguien
       tags:
         - admin
+  /api/v1/public/registrations:
+    post:
+      description: >-
+        Identifica al corredor por su **CI**: si ya tenia cuenta en la app se cuelga de ella, y si
+        no, se le crea una con usuario y contrasena iguales a su CI (la app le exigira cambiarla).
+        Devuelve el QR del organizador y un `publicToken` que **solo se entrega aqui**: es lo que
+        despues autoriza a subir el comprobante.
+      operationId: PublicRegistrationController_inscribir
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PublicRegistrationDto'
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicRegistrationResultDto'
+        '409':
+          description: ALREADY_REGISTERED / MARATHON_FULL / REGISTRATION_CLOSED / QR_NOT_CONFIGURED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      summary: Inscribe a un corredor desde la web y abre el cobro por QR
+      tags:
+        - public
+  /api/v1/public/registrations/{id}/proof:
+    post:
+      description: >-
+        El cobro **sigue pendiente**: queda `in_review` hasta que un organizador lo apruebe. Un
+        token que no cuadra responde 404, igual que una inscripcion que no existe.
+      operationId: PublicRegistrationController_subirComprobante
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: x-public-token
+          required: true
+          in: header
+          schema:
+            type: string
+        - name: token
+          required: true
+          in: query
+          schema:
+            type: string
+        - name: X-Public-Token
+          in: header
+          description: El `publicToken` del alta
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+                reference:
+                  type: string
+                  example: '00123456789'
+      responses:
+        '201':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProofDto'
+      summary: Sube el comprobante del pago
+      tags:
+        - public
+  /api/v1/public/registrations/{id}:
+    get:
+      description: >-
+        Lo que la web sondea despues de subir el comprobante: `paymentStatus` pasa a `paid` y
+        aparece el dorsal cuando el organizador aprueba.
+      operationId: PublicRegistrationController_estado
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: x-public-token
+          required: true
+          in: header
+          schema:
+            type: string
+        - name: token
+          required: true
+          in: query
+          schema:
+            type: string
+        - name: X-Public-Token
+          in: header
+          description: El `publicToken` del alta
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicRegistrationStatusDto'
+      summary: Estado de la inscripcion y del comprobante
+      tags:
+        - public
   /api/v1/config/app:
     get:
       description: >-
@@ -3126,6 +3579,13 @@ components:
         email:
           type: string
           example: runner@test.com
+          description: Opcional si mandas `ci`.
+        ci:
+          type: string
+          example: 1234567 LP
+          description: >-
+            Cedula de identidad. Opcional si mandas `email`. Se guarda normalizada (sin espacios ni
+            guiones, en mayusculas), asi que `1234567 lp` y `1234567-LP` son la misma.
         password:
           type: string
           example: Test1234!
@@ -3135,7 +3595,6 @@ components:
           example: Alvaro Quispe
       required:
         - deviceId
-        - email
         - password
         - name
     AuthUserDto:
@@ -3144,7 +3603,14 @@ components:
         id:
           type: string
         email:
-          type: string
+          type: object
+          nullable: true
+          description: Null si la cuenta se dio de alta solo con CI.
+        ci:
+          type: object
+          nullable: true
+          example: 1234567LP
+          description: CI normalizada.
         name:
           type: string
         role:
@@ -3152,6 +3618,11 @@ components:
           enum:
             - runner
             - admin
+        mustChangePassword:
+          type: boolean
+          description: >-
+            True cuando la contrasena la puso otro (alta desde la web: usuario CI, contrasena CI).
+            La app tiene que mandar al usuario a cambiarla antes de dejarle usar nada.
         onboardingSeenAt:
           type: object
           nullable: true
@@ -3159,8 +3630,10 @@ components:
       required:
         - id
         - email
+        - ci
         - name
         - role
+        - mustChangePassword
         - onboardingSeenAt
     AuthSessionResponseDto:
       type: object
@@ -3239,15 +3712,16 @@ components:
         platform:
           type: string
           example: android
-        email:
+        identifier:
           type: string
           example: runner@test.com
+          description: Email o CI. Con `@` se trata como email; sin `@`, como CI.
         password:
           type: string
           example: Test1234!
       required:
         - deviceId
-        - email
+        - identifier
         - password
     RefreshDto:
       type: object
@@ -3339,6 +3813,19 @@ components:
       required:
         - token
         - password
+    ChangePasswordDto:
+      type: object
+      properties:
+        currentPassword:
+          type: string
+          description: La contrasena actual. En un alta desde la web, la CI.
+        newPassword:
+          type: string
+          example: NuevaClave123
+          minLength: 8
+      required:
+        - currentPassword
+        - newPassword
     UserProfileDto:
       type: object
       properties:
@@ -3389,7 +3876,14 @@ components:
         id:
           type: string
         email:
-          type: string
+          type: object
+          nullable: true
+          description: Null si la cuenta se dio de alta solo con CI.
+        ci:
+          type: object
+          nullable: true
+          example: 1234567LP
+          description: CI normalizada.
         name:
           type: string
         role:
@@ -3397,6 +3891,9 @@ components:
           enum:
             - runner
             - admin
+        mustChangePassword:
+          type: boolean
+          description: True = la contrasena la puso otro y hay que cambiarla antes de nada.
         emailVerifiedAt:
           type: object
           nullable: true
@@ -3407,8 +3904,10 @@ components:
       required:
         - id
         - email
+        - ci
         - name
         - role
+        - mustChangePassword
         - emailVerifiedAt
         - createdAt
         - profile
@@ -3758,10 +4257,27 @@ components:
         docId:
           type: string
           example: 1234567 LP
-          description: Documento de identidad
+          description: >-
+            Cedula de identidad. Es la clave con la que se cruza una inscripcion hecha desde la web
+            con la cuenta que el corredor ya tenia en la app.
         phone:
           type: string
           example: +591 70000000
+          description: 'Celular. Obligatorio: es por donde el organizador avisa cambios de ultima hora.'
+        email:
+          type: string
+          example: corredor@mail.com
+          description: 'Opcional a proposito: hay corredores que no tienen o no lo quieren dar.'
+        knowsCam:
+          type: boolean
+          example: true
+          description: ¿Conoce usted el trabajo del CAM?
+        acceptsDonorCall:
+          type: boolean
+          example: false
+          description: >-
+            ¿Acepta que le llamemos para la oportunidad de ser un donador del CAM? Es un
+            consentimiento: se guarda tal cual lo respondio y no se asume nada por omision.
         emergencyContactName:
           type: string
           example: Maria Quispe
@@ -3778,6 +4294,9 @@ components:
       required:
         - fullName
         - docId
+        - phone
+        - knowsCam
+        - acceptsDonorCall
     QuoteLineDto:
       type: object
       properties:
@@ -4019,6 +4538,16 @@ components:
         coverUrl:
           type: object
           nullable: true
+        paymentQrUrl:
+          type: object
+          nullable: true
+          description: >-
+            TEMPORAL — QR de cobro del organizador. `null` = esta carrera no admite el metodo
+            `qr_manual`, asi que la app no debe ofrecerlo. Ver `docs/pago-qr-manual.md`.
+        paymentQrInstructions:
+          type: object
+          nullable: true
+          description: TEMPORAL — instrucciones junto al QR.
         registrationStatus:
           type: string
           enum:
@@ -4050,6 +4579,8 @@ components:
         - priceCents
         - currency
         - coverUrl
+        - paymentQrUrl
+        - paymentQrInstructions
         - registrationStatus
         - capacity
         - slotsTaken
@@ -4153,6 +4684,16 @@ components:
         coverUrl:
           type: object
           nullable: true
+        paymentQrUrl:
+          type: object
+          nullable: true
+          description: >-
+            TEMPORAL — QR de cobro del organizador. `null` = esta carrera no admite el metodo
+            `qr_manual`, asi que la app no debe ofrecerlo. Ver `docs/pago-qr-manual.md`.
+        paymentQrInstructions:
+          type: object
+          nullable: true
+          description: TEMPORAL — instrucciones junto al QR.
         registrationStatus:
           type: string
           enum:
@@ -4223,6 +4764,8 @@ components:
         - priceCents
         - currency
         - coverUrl
+        - paymentQrUrl
+        - paymentQrInstructions
         - registrationStatus
         - capacity
         - slotsTaken
@@ -4294,6 +4837,7 @@ components:
             - card
             - qr
             - bank_transfer
+            - qr_manual
           example: card
           description: >-
             `card` resuelve en el acto. `qr` devuelve un PNG y queda `pending`: hay que sondear `GET
@@ -4371,6 +4915,47 @@ components:
           description: Solo en `bank_transfer`
           allOf:
             - $ref: '#/components/schemas/BankDetailsDto'
+    ProofDto:
+      type: object
+      properties:
+        id:
+          type: string
+        paymentId:
+          type: string
+        status:
+          type: string
+          enum:
+            - in_review
+            - approved
+            - rejected
+          description: >-
+            `in_review` = subido y esperando al organizador; el cobro sigue `pending`. `approved` =
+            el cobro paso a `paid` y la inscripcion quedo confirmada. `rejected` = hay que subir
+            otro; el cobro sigue `pending`.
+        imageUrl:
+          type: string
+          description: URL publica de la imagen ya procesada (WebP, sin EXIF)
+        reference:
+          type: object
+          nullable: true
+        note:
+          type: object
+          nullable: true
+          description: Motivo del rechazo o nota del organizador
+        reviewedAt:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+      required:
+        - id
+        - paymentId
+        - status
+        - imageUrl
+        - reference
+        - note
+        - reviewedAt
+        - createdAt
     PaymentDto:
       type: object
       properties:
@@ -4384,6 +4969,7 @@ components:
             - card
             - qr
             - bank_transfer
+            - qr_manual
         status:
           type: string
           enum:
@@ -4417,6 +5003,15 @@ components:
         refundedAt:
           type: object
           nullable: true
+        proof:
+          nullable: true
+          description: >-
+            TEMPORAL — solo en el metodo `qr_manual`: el ultimo comprobante subido. Con `status:
+            in_review` el cobro **sigue pendiente**: haber mandado la captura no es haber pagado.
+            Ver `docs/pago-qr-manual.md`.
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ProofDto'
         createdAt:
           type: string
       required:
@@ -4431,6 +5026,7 @@ components:
         - expiresAt
         - paidAt
         - refundedAt
+        - proof
         - createdAt
     CheckoutResultDto:
       type: object
@@ -4505,6 +5101,89 @@ components:
       required:
         - received
         - handled
+    PendingProofDto:
+      type: object
+      properties:
+        id:
+          type: string
+        paymentId:
+          type: string
+        status:
+          type: string
+          enum:
+            - in_review
+            - approved
+            - rejected
+          description: >-
+            `in_review` = subido y esperando al organizador; el cobro sigue `pending`. `approved` =
+            el cobro paso a `paid` y la inscripcion quedo confirmada. `rejected` = hay que subir
+            otro; el cobro sigue `pending`.
+        imageUrl:
+          type: string
+          description: URL publica de la imagen ya procesada (WebP, sin EXIF)
+        reference:
+          type: object
+          nullable: true
+        note:
+          type: object
+          nullable: true
+          description: Motivo del rechazo o nota del organizador
+        reviewedAt:
+          type: object
+          nullable: true
+        createdAt:
+          type: string
+        amountCents:
+          type: number
+          example: 20000
+        currency:
+          type: string
+          example: BOB
+        registrationId:
+          type: string
+        marathon:
+          type: string
+          example: Maraton de La Paz
+        runner:
+          type: string
+          example: Alvaro Quispe
+        runnerCi:
+          type: object
+          nullable: true
+          example: 1234567LP
+        runnerEmail:
+          type: object
+          nullable: true
+      required:
+        - id
+        - paymentId
+        - status
+        - imageUrl
+        - reference
+        - note
+        - reviewedAt
+        - createdAt
+        - amountCents
+        - currency
+        - registrationId
+        - marathon
+        - runner
+        - runnerCi
+        - runnerEmail
+    ApproveProofDto:
+      type: object
+      properties:
+        note:
+          type: string
+          description: Nota interna opcional del organizador
+    RejectProofDto:
+      type: object
+      properties:
+        note:
+          type: string
+          example: La captura es de otra transferencia
+      required:
+        - note
     RouteSummaryDto:
       type: object
       properties:
@@ -6004,6 +6683,16 @@ components:
         coverUrl:
           type: object
           nullable: true
+        paymentQrUrl:
+          type: object
+          nullable: true
+          description: >-
+            TEMPORAL — QR de cobro del organizador. `null` = esta carrera no admite el metodo
+            `qr_manual`, asi que la app no debe ofrecerlo. Ver `docs/pago-qr-manual.md`.
+        paymentQrInstructions:
+          type: object
+          nullable: true
+          description: TEMPORAL — instrucciones junto al QR.
         registrationStatus:
           type: string
           enum:
@@ -6046,6 +6735,8 @@ components:
         - priceCents
         - currency
         - coverUrl
+        - paymentQrUrl
+        - paymentQrInstructions
         - registrationStatus
         - capacity
         - slotsTaken
@@ -6474,10 +7165,18 @@ components:
           type: object
           nullable: true
           description: Null = las inscripciones cierran al largar
-        coverUrl:
+        paymentQrUrl:
           type: object
           nullable: true
-          example: /uploads/maratones/lapaz.jpg
+          example: https://cdn.cam.org.bo/qr-maraton.png
+          description: >-
+            TEMPORAL — QR de cobro del organizador (se sube por `POST /admin/marathons/:id/qr`).
+            **Sin esto la carrera no admite el metodo `qr_manual`.** Ver `docs/pago-qr-manual.md`.
+        paymentQrInstructions:
+          type: object
+          nullable: true
+          example: Escanea con tu banca movil y pon la glosa que aparece abajo.
+          description: TEMPORAL — texto que se pinta junto al QR.
         schedule:
           example:
             - time: '06:00'
@@ -6583,10 +7282,18 @@ components:
           type: object
           nullable: true
           description: Null = las inscripciones cierran al largar
-        coverUrl:
+        paymentQrUrl:
           type: object
           nullable: true
-          example: /uploads/maratones/lapaz.jpg
+          example: https://cdn.cam.org.bo/qr-maraton.png
+          description: >-
+            TEMPORAL — QR de cobro del organizador (se sube por `POST /admin/marathons/:id/qr`).
+            **Sin esto la carrera no admite el metodo `qr_manual`.** Ver `docs/pago-qr-manual.md`.
+        paymentQrInstructions:
+          type: object
+          nullable: true
+          example: Escanea con tu banca movil y pon la glosa que aparece abajo.
+          description: TEMPORAL — texto que se pinta junto al QR.
         schedule:
           example:
             - time: '06:00'
@@ -6826,6 +7533,134 @@ components:
           minLength: 8
       required:
         - password
+    PublicRegistrationDto:
+      type: object
+      properties:
+        marathonId:
+          type: string
+          description: Id o slug de la maraton
+        personalData:
+          $ref: '#/components/schemas/PersonalDataDto'
+        categoryId:
+          type: object
+          description: Id de la categoria, si la carrera las tiene
+        extras:
+          description: Seleccion completa de adicionales
+          type: array
+          items:
+            $ref: '#/components/schemas/QuoteExtraDto'
+        termsAccepted:
+          type: boolean
+          example: true
+          description: Tiene que ser exactamente `true`.
+      required:
+        - marathonId
+        - personalData
+        - termsAccepted
+    PublicQrDto:
+      type: object
+      properties:
+        imageUrl:
+          type: string
+          example: https://api.paceup.app/uploads/qr/maraton.png
+        instructions:
+          type: object
+          nullable: true
+        reference:
+          type: string
+          example: PU-A1B2C3
+          description: Glosa que el corredor tiene que poner en la transferencia.
+      required:
+        - imageUrl
+        - instructions
+        - reference
+    PublicAccountDto:
+      type: object
+      properties:
+        created:
+          type: boolean
+          description: >-
+            True = la cuenta se creo ahora. False = ya existia (se inscribio antes, o se registro en
+            la app) y esta inscripcion se colgo de ella.
+        username:
+          type: string
+          example: 1234567LP
+          description: Con que entra en la app. Es su CI normalizada.
+        mustChangePassword:
+          type: boolean
+          description: >-
+            True = la contrasena inicial **es su CI** y la app le va a exigir cambiarla la primera
+            vez. La web tiene que decirselo: es la unica vez que alguien se lo va a contar.
+      required:
+        - created
+        - username
+        - mustChangePassword
+    PublicRegistrationResultDto:
+      type: object
+      properties:
+        registrationId:
+          type: string
+        publicToken:
+          type: string
+          description: >-
+            Token opaco. **Se devuelve una sola vez**: guardalo, es lo que autoriza a subir el
+            comprobante y a consultar el estado sin sesion.
+        paymentId:
+          type: string
+        paymentStatus:
+          type: string
+          example: pending
+        totalCents:
+          type: number
+          example: 49000
+          description: Centavos. Lo calculo el servidor.
+        currency:
+          type: string
+          example: BOB
+        qr:
+          $ref: '#/components/schemas/PublicQrDto'
+        expiresAt:
+          type: object
+          nullable: true
+          description: Cuando caduca el cobro si nadie sube comprobante
+        account:
+          $ref: '#/components/schemas/PublicAccountDto'
+      required:
+        - registrationId
+        - publicToken
+        - paymentId
+        - paymentStatus
+        - totalCents
+        - currency
+        - qr
+        - expiresAt
+        - account
+    PublicRegistrationStatusDto:
+      type: object
+      properties:
+        registrationId:
+          type: string
+        registrationStatus:
+          type: string
+          example: pending_payment
+        bibNumber:
+          type: object
+          nullable: true
+          example: MLP-0042
+        paymentStatus:
+          type: string
+          example: pending
+        proof:
+          nullable: true
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ProofDto'
+      required:
+        - registrationId
+        - registrationStatus
+        - bibNumber
+        - paymentStatus
+        - proof
     ServiceFeeInfoDto:
       type: object
       properties:

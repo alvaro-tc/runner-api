@@ -749,6 +749,42 @@ export class AdminService {
    * misma clave de storage que cualquier otro binario de la API.
    */
   async subirQr(marathonId: string, archivo: { buffer: Buffer; size: number }) {
+    const clave = await this.guardarImagenDeMaraton(marathonId, archivo, 'qr');
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: { paymentQrUrl: clave },
+    });
+
+    this.logger.log(`QR de cobro actualizado para la maraton ${marathonId}`);
+
+    return this.detalleMaraton(marathonId);
+  }
+
+  /**
+   * Sube el afiche promocional. Mismo trato que el QR y por lo mismo: el afiche
+   * vive en el VPS, no en el hosting del organizador, que es lo que se cae el
+   * dia de la carrera.
+   */
+  async subirAfiche(marathonId: string, archivo: { buffer: Buffer; size: number }) {
+    const clave = await this.guardarImagenDeMaraton(marathonId, archivo, 'cover');
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: { coverUrl: clave },
+    });
+
+    this.logger.log(`Afiche actualizado para la maraton ${marathonId}`);
+
+    return this.detalleMaraton(marathonId);
+  }
+
+  /** Valida, reencoda y guarda; devuelve la CLAVE de storage, nunca la URL. */
+  private async guardarImagenDeMaraton(
+    marathonId: string,
+    archivo: { buffer: Buffer; size: number },
+    carpeta: 'qr' | 'cover',
+  ): Promise<string> {
     await this.buscarMaraton(marathonId);
 
     const maximo = this.config.get('PAYMENT_PROOF_MAX_BYTES');
@@ -763,17 +799,10 @@ export class AdminService {
     const webp = await reencodarImagenAWebp(archivo.buffer, {
       maxWidthPx: this.config.get('PAYMENT_PROOF_MAX_WIDTH_PX'),
     });
-    const clave = `marathons/qr/${marathonId}/${randomUUID()}.webp`;
+    const clave = `marathons/${carpeta}/${marathonId}/${randomUUID()}.webp`;
     await this.storage.save(clave, webp);
 
-    await this.prisma.marathon.update({
-      where: { id: marathonId },
-      data: { paymentQrUrl: clave },
-    });
-
-    this.logger.log(`QR de cobro actualizado para la maraton ${marathonId}`);
-
-    return this.detalleMaraton(marathonId);
+    return clave;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -870,7 +899,9 @@ export class AdminService {
       registrationStatus: maraton.registrationStatus,
       resolved: resolverEstado(maraton),
       registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
-      coverUrl: maraton.coverUrl,
+      // Igual que el QR: el panel pinta una vista previa y una clave de
+      // storage relativa no le sirve.
+      coverUrl: this.storage.publicUrl(maraton.coverUrl),
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
       // en una vista previa y una clave de storage relativa no le sirve.
@@ -1147,7 +1178,6 @@ export class AdminService {
       'priceCents',
       'currency',
       'registrationStatus',
-      'coverUrl',
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       'paymentQrUrl',
       'paymentQrInstructions',
