@@ -545,6 +545,9 @@ export class AdminService {
       capacity: m.capacity,
       slotsTaken: m.slotsTaken,
       priceCents: m.priceCents,
+      // La lista pinta la miniatura: reconocer una carrera por su afiche es
+      // mas rapido que leer trece nombres parecidos.
+      coverUrl: this.storage.publicUrl(m.coverUrl),
       published: m.publishedAt !== null,
       intent: m.registrationStatus,
       resolved: resolverEstado(m),
@@ -776,6 +779,46 @@ export class AdminService {
     return this.detalleMaraton(marathonId);
   }
 
+  /**
+   * Sube la foto de la maraton: el afiche que el corredor ve en el catalogo.
+   *
+   * Mismo trato que el QR y por la misma razon. `coverUrl` nacio como campo de
+   * texto y aceptaba una URL cualquiera, lo que dejaba el afiche colgando de un
+   * servidor ajeno: el dia que ese enlace muere, la carrera se queda sin
+   * imagen y nadie se entera. Subiendola, el archivo es nuestro y la columna
+   * guarda una clave de storage como todas las demas.
+   *
+   * Se admite mas ancho que en un comprobante porque esto se pinta a pantalla
+   * completa como cabecera, no se lee de cerca buscando un numero.
+   */
+  async subirPortada(marathonId: string, archivo: { buffer: Buffer; size: number }) {
+    await this.buscarMaraton(marathonId);
+
+    const maximo = this.config.get('MARATHON_COVER_MAX_BYTES');
+    if (archivo.size > maximo) {
+      throw new AppException(
+        ErrorCode.FILE_TOO_LARGE,
+        `La imagen supera el maximo de ${Math.round(maximo / 1024 / 1024)} MB`,
+        HttpStatus.PAYLOAD_TOO_LARGE,
+      );
+    }
+
+    const webp = await reencodarImagenAWebp(archivo.buffer, {
+      maxWidthPx: this.config.get('MARATHON_COVER_MAX_WIDTH_PX'),
+    });
+    const clave = `marathons/cover/${marathonId}/${randomUUID()}.webp`;
+    await this.storage.save(clave, webp);
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: { coverUrl: clave },
+    });
+
+    this.logger.log(`Portada actualizada para la maraton ${marathonId}`);
+
+    return this.detalleMaraton(marathonId);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   //  Recorridos preestablecidos
   // ─────────────────────────────────────────────────────────────────────────
@@ -870,7 +913,10 @@ export class AdminService {
       registrationStatus: maraton.registrationStatus,
       resolved: resolverEstado(maraton),
       registrationClosesAt: maraton.registrationClosesAt?.toISOString() ?? null,
-      coverUrl: maraton.coverUrl,
+      // Resuelto a URL publica igual que en el catalogo: desde que la
+      // portada se sube, la columna guarda una clave de storage y el panel
+      // necesita pintarla en la vista previa.
+      coverUrl: this.storage.publicUrl(maraton.coverUrl),
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
       // en una vista previa y una clave de storage relativa no le sirve.

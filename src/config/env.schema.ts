@@ -135,6 +135,16 @@ export const envSchema = z.object({
     .default(5 * 1024 * 1024),
   /// Lado del avatar cuadrado que se guarda. Todo lo que llega se redimensiona.
   AVATAR_SIZE_PX: z.coerce.number().int().positive().default(512),
+  /// Tamano maximo de la portada de una maraton ANTES de procesar. 8 MB: el
+  /// afiche suele venir de una foto de galeria, no de una captura.
+  MARATHON_COVER_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024),
+  /// Ancho maximo al que se reescala la portada guardada. 1600 px alcanza para
+  /// pintarla de cabecera a pantalla completa sin guardar fotos de 12 MP.
+  MARATHON_COVER_MAX_WIDTH_PX: z.coerce.number().int().positive().default(1600),
 
   // --- Cobro por QR manual (TEMPORAL, ver docs/pago-qr-manual.md) ----------
   /// Tamano maximo del comprobante ANTES de procesar. 8 MB: una captura de

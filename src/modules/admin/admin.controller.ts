@@ -266,7 +266,11 @@ export class AdminController {
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
-    schema: { type: 'object', required: ['file'], properties: { file: { type: 'string', format: 'binary' } } },
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
   })
   @ApiOperation({
     summary: 'Subir el QR de cobro de la maratón',
@@ -285,6 +289,35 @@ export class AdminController {
     }
 
     return this.admin.subirQr(id, file);
+  }
+
+  @Post('marathons/:id/cover')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiOperation({
+    summary: 'Subir la foto de la maratón',
+    description:
+      'Reemplaza el `coverUrl` actual. Es el afiche que el corredor ve en el catálogo y en el ' +
+      'detalle de la carrera. La imagen se reencoda a WebP: lo que se manda no es lo que se guarda.',
+  })
+  @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
+  subirPortada(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
+    if (!file) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Falta el archivo en el campo `file`',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.admin.subirPortada(id, file);
   }
 
   @Delete('marathons/:id')
