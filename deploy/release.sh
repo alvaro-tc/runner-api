@@ -27,6 +27,18 @@ set -a; . "$ENV_FILE"; set +a
 
 echo "▸ Desplegando $(git rev-parse --short HEAD 2>/dev/null || echo 'sin git') en $APP_DIR"
 
+# El directorio de subidas tiene que pertenecer al usuario del servicio. Creado
+# a mano como root —copiando los QR del seed, por ejemplo— queda 755 root:root:
+# el arranque no se entera (mkdir -p sobre un directorio existente no falla) y
+# cada subida de afiche, QR o avatar responde 500. Se corrige aqui, que es donde
+# ya se sabe quien corre el servicio.
+echo "▸ Directorio de subidas"
+UPLOADS_DIR="${UPLOADS_DIR:-/srv/running-api/uploads}"
+SERVICE_USER="${SERVICE_USER:-$(id -un)}"
+sudo mkdir -p "$UPLOADS_DIR"
+sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$UPLOADS_DIR"
+sudo chmod -R u+rwX "$UPLOADS_DIR"
+
 echo "▸ Dependencias"
 # `npm ci` y no `install`: instala exactamente el lock, sin resolver versiones
 # nuevas. Con devDependencies porque el build necesita el compilador; podarlas

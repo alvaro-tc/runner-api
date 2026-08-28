@@ -59,6 +59,14 @@ sudo chmod 750 /etc/running-api
 tocar los avatares de los usuarios, y el servicio systemd solo tiene permiso de
 escritura ahí (`ReadWritePaths`).
 
+> **Ojo con el propietario de `uploads/`.** Si el directorio acaba siendo de
+> `root` —lo típico es copiar ahí unas imágenes a mano con `sudo`—, la API
+> arranca igual (`mkdir -p` sobre un directorio que ya existe no falla) pero
+> **toda** subida de imagen responde 500: afiche, QR y avatar. Se comprueba con
+> `curl -s localhost:3000/ready | jq .data.checks.uploads` y se arregla con
+> `sudo chown -R paceup:paceup /srv/running-api/uploads`. `deploy/release.sh` ya
+> lo corrige en cada publicación.
+
 ## 2. Paquetes
 
 ```bash

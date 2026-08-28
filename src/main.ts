@@ -9,7 +9,7 @@ import express from 'express';
 import { AppModule } from './app.module';
 import { AppConfigService } from './config/app-config.service';
 import { setupSwagger } from './swagger';
-import { UPLOADS_PUBLIC_PREFIX } from './modules/storage/storage.service';
+import { StorageService, UPLOADS_PUBLIC_PREFIX } from './modules/storage/storage.service';
 import { RedisIoAdapter } from './modules/realtime/redis-io.adapter';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 
@@ -58,6 +58,16 @@ async function bootstrap(): Promise<void> {
   // asegura que en desarrollo y en un compose minimo funcionen igual.
   const uploadsDir = resolve(config.get('UPLOADS_DIR'));
   await mkdir(uploadsDir, { recursive: true });
+  // `mkdir -p` no falla sobre un directorio que ya existe aunque sea de otro
+  // usuario: sin esta sonda, un uploads/ creado como root arrancaba bien y
+  // convertia CADA subida (afiche, QR, avatar) en un 500 sin pista en el log.
+  // Se avisa y se sigue: que no se puedan subir imagenes no justifica dejar la
+  // carrera sin API.
+  try {
+    await app.get(StorageService).assertWritable();
+  } catch (error) {
+    NestLogger.error((error as Error).message, undefined, 'Bootstrap');
+  }
   app.useStaticAssets(uploadsDir, {
     prefix: UPLOADS_PUBLIC_PREFIX,
     // Los nombres llevan un UUID: cambiar el avatar cambia la URL, asi que el

@@ -1,7 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
+import { AppException } from '../../common/errors/app.exception';
+import { ErrorCode } from '../../common/errors/error-codes';
 
 /** Un archivo ya guardado. `key` es lo que se persiste; `url` lo que se sirve. */
 export interface StoredFile {
@@ -25,6 +28,8 @@ export interface StoredFile {
 @Injectable()
 export abstract class StorageService {
   abstract save(key: string, data: Buffer): Promise<StoredFile>;
+  /** Falla si el destino no admite escrituras. Se llama al arrancar. */
+  abstract assertWritable(): Promise<void>;
   abstract delete(key: string): Promise<void>;
   abstract url(key: string): string;
 
@@ -62,12 +67,64 @@ export class LocalStorageService extends StorageService {
     this.baseUrl = config.get('PUBLIC_BASE_URL').replace(/\/+$/, '');
   }
 
+  /**
+   * Escribe el binario y devuelve su clave.
+   *
+   * Un fallo del sistema de ficheros —el clasico es un `UPLOADS_DIR` creado a
+   * mano como root, o fuera del `ReadWritePaths` del servicio systemd— salia
+   * como excepcion cruda y llegaba al cliente como un 500 opaco: la subida se
+   * caia siempre y el log no decia por que. Aqui se registra la ruta y el
+   * `errno` reales, y al cliente le llega un 503 que dice que el problema es
+   * del servidor y no de su imagen.
+   */
   async save(key: string, data: Buffer): Promise<StoredFile> {
     const destino = this.resolveKey(key);
-    await mkdir(dirname(destino), { recursive: true });
-    await writeFile(destino, data);
+
+    try {
+      await mkdir(dirname(destino), { recursive: true });
+      await writeFile(destino, data);
+    } catch (error) {
+      const causa = error as NodeJS.ErrnoException;
+      this.logger.error(
+        { err: error, destino, root: this.root, codigo: causa.code },
+        `No se pudo escribir ${key} en ${destino}: ${causa.code ?? causa.message}`,
+      );
+
+      throw new AppException(
+        ErrorCode.SERVICE_UNAVAILABLE,
+        'No se pudo guardar el archivo en el servidor',
+        HttpStatus.SERVICE_UNAVAILABLE,
+        [`${causa.code ?? 'ERROR'} al escribir en ${this.root}`],
+      );
+    }
 
     return { key, url: this.url(key), bytes: data.byteLength };
+  }
+
+  /**
+   * Comprueba que el directorio de subidas es escribible de verdad.
+   *
+   * `mkdir -p` sobre un directorio que ya existe no falla aunque sea de otro
+   * usuario, asi que el arranque no detectaba el caso. Se escribe y se borra un
+   * fichero de prueba: es la unica forma de saberlo antes de que la primera
+   * subida real se caiga con un 500.
+   */
+  async assertWritable(): Promise<void> {
+    const sonda = join(this.root, `.write-test-${randomUUID()}`);
+
+    try {
+      await mkdir(this.root, { recursive: true });
+      await writeFile(sonda, 'ok');
+    } catch (error) {
+      const causa = error as NodeJS.ErrnoException;
+      throw new Error(
+        `UPLOADS_DIR (${this.root}) no es escribible por este proceso ` +
+          `(${causa.code ?? causa.message}). Revisa el propietario del directorio ` +
+          `(chown -R al usuario del servicio) y el ReadWritePaths de systemd.`,
+      );
+    } finally {
+      await rm(sonda, { force: true }).catch(() => undefined);
+    }
   }
 
   /**

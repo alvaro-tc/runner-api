@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import Redis from 'ioredis';
 import { AppConfigService } from '../config/app-config.service';
 import { PrismaService } from '../database/prisma.service';
+import { StorageService } from '../modules/storage/storage.service';
 
 export type DependencyStatus = 'up' | 'down';
 
@@ -25,13 +26,41 @@ export class HealthService implements OnModuleDestroy {
   constructor(
     private readonly config: AppConfigService,
     private readonly prisma: PrismaService,
+    private readonly storage: StorageService,
   ) {}
 
   async check(): Promise<ReadinessReport> {
-    const [database, redis] = await Promise.all([this.checkPostgres(), this.checkRedis()]);
-    const checks = { database, redis };
-    const status = Object.values(checks).every((c) => c.status === 'up') ? 'ok' : 'error';
+    const [database, redis, uploads] = await Promise.all([
+      this.checkPostgres(),
+      this.checkRedis(),
+      this.checkUploads(),
+    ]);
+    const checks = { database, redis, uploads };
+    // `uploads` informa pero NO tumba el readiness: sin disco de subidas la API
+    // sigue atendiendo inscripciones y pagos, y bloquear un despliegue por un
+    // permiso de directorio seria peor que el fallo que reporta. Que este a la
+    // vista es lo que importa: un `uploads: down` explica de un vistazo por que
+    // fallan TODAS las subidas de imagen.
+    const status = database.status === 'up' && redis.status === 'up' ? 'ok' : 'error';
     return { status, checks };
+  }
+
+  /**
+   * Escribe y borra un fichero de prueba en `UPLOADS_DIR`.
+   *
+   * Comprobar solo que el directorio existe no sirve: el fallo tipico es que
+   * exista pero sea de otro usuario (creado como root al copiar imagenes a
+   * mano), y entonces cada subida responde 500 sin que nada mas lo delate.
+   */
+  private async checkUploads(): Promise<{ status: DependencyStatus; error?: string }> {
+    try {
+      await this.storage.assertWritable();
+      return { status: 'up' };
+    } catch (err) {
+      this.logger.warn(`Directorio de subidas no escribible: ${asMessage(err)}`);
+      // El detalle (ruta y errno) queda en el log: `/ready` es publico.
+      return { status: 'down', error: 'El directorio de subidas no admite escrituras' };
+    }
   }
 
   private async checkPostgres(): Promise<{ status: DependencyStatus; error?: string }> {

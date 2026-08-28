@@ -280,10 +280,10 @@ export class AdminController {
   })
   @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
   subirQr(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
-    if (!file) {
+    if (!file?.buffer?.length) {
       throw new AppException(
         ErrorCode.VALIDATION_ERROR,
-        'Falta el archivo en el campo `file`',
+        'Falta el archivo en el campo `file`, o llego vacio',
         HttpStatus.BAD_REQUEST,
       );
     }
@@ -310,10 +310,10 @@ export class AdminController {
   })
   @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
   subirAfiche(@Param('id') id: string, @UploadedFile() file?: Express.Multer.File) {
-    if (!file) {
+    if (!file?.buffer?.length) {
       throw new AppException(
         ErrorCode.VALIDATION_ERROR,
-        'Falta el archivo en el campo `file`',
+        'Falta el archivo en el campo `file`, o llego vacio',
         HttpStatus.BAD_REQUEST,
       );
     }
