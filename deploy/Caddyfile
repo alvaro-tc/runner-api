@@ -27,7 +27,7 @@ api.paceup.example {
 	# gasta event loop para leer un fichero. La ruta es la misma que expone la
 	# API (UPLOADS_DIR), asi que las URLs guardadas no cambian.
 	handle_path /uploads/* {
-		root * /srv/running-api/uploads
+		root * /opt/running-api/uploads
 		# Los nombres llevan UUID: el contenido de una URL nunca cambia.
 		header Cache-Control "public, max-age=2592000, immutable"
 		file_server {

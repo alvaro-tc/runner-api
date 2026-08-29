@@ -2,7 +2,7 @@
 #
 # Publica la version que YA esta en el directorio de trabajo del VPS.
 #
-#   cd /srv/running-api/current
+#   cd /opt/running-api/current
 #   git pull            # <- lo hace el operador, a mano y a conciencia
 #   sudo -u paceup deploy/release.sh
 #
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/srv/running-api/current}"
+APP_DIR="${APP_DIR:-/opt/running-api/current}"
 ENV_FILE="${ENV_FILE:-/etc/running-api/.env.production}"
 SERVICE="${SERVICE:-running-api}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000}"
@@ -33,7 +33,7 @@ echo "▸ Desplegando $(git rev-parse --short HEAD 2>/dev/null || echo 'sin git'
 # cada subida de afiche, QR o avatar responde 500. Se corrige aqui, que es donde
 # ya se sabe quien corre el servicio.
 echo "▸ Directorio de subidas"
-UPLOADS_DIR="${UPLOADS_DIR:-/srv/running-api/uploads}"
+UPLOADS_DIR="${UPLOADS_DIR:-/opt/running-api/uploads}"
 SERVICE_USER="${SERVICE_USER:-$(id -un)}"
 sudo mkdir -p "$UPLOADS_DIR"
 sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$UPLOADS_DIR"

@@ -31,7 +31,7 @@ import { ErrorCode } from '../../common/errors/error-codes';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { RegistrationStatus } from '../../../generated/prisma/enums';
+import { RegistrationStatus, type UserRole } from '../../../generated/prisma/enums';
 import {
   CreateRouteDto,
   ListRoutesQueryDto,
@@ -79,6 +79,12 @@ const LIMITE_ADMIN = { corto: { limit: 60, ttl: 60_000 } };
  * `@Roles`, asi que un endpoint nuevo en esta clase que se olvide el decorador
  * queda abierto a cualquier usuario logueado: por eso el decorador va **en la
  * clase**, no en cada metodo.
+ *
+ * La excepcion es el bloque de **usuarios**, que lleva su propio `@Roles` para
+ * dejar entrar tambien a `organizer`. El decorador de metodo sobrescribe al de
+ * la clase, asi que ampliar el acceso es explicito y visible endpoint por
+ * endpoint; lo demas —maratones, recorridos, precios, resultados— se queda en
+ * `admin` por no llevar nada.
  */
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
@@ -552,6 +558,7 @@ export class AdminController {
   // ─── Usuarios ────────────────────────────────────────────────────────────
 
   @Get('users')
+  @Roles('admin', 'organizer')
   @ApiQuery({ name: 'q', required: false, description: 'Busca por email o nombre' })
   @ApiOperation({
     summary: 'Usuarios, sin datos sensibles',
@@ -563,6 +570,7 @@ export class AdminController {
     return this.admin.listarUsuarios(q);
   }
   @Post('users')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Crear una cuenta',
     description:
@@ -572,11 +580,12 @@ export class AdminController {
       'contrario.',
   })
   @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'EMAIL_ALREADY_REGISTERED' })
-  crearUsuario(@Body() dto: CreateUserDto) {
-    return this.admin.crearUsuario(dto);
+  crearUsuario(@CurrentUser('role') actorRole: UserRole, @Body() dto: CreateUserDto) {
+    return this.admin.crearUsuario(dto, actorRole);
   }
 
   @Put('users/:id')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Editar nombre, email, rol o verificación',
     description:
@@ -586,13 +595,15 @@ export class AdminController {
   @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT / email ocupado' })
   editarUsuario(
     @CurrentUser('sub') adminId: string,
+    @CurrentUser('role') actorRole: UserRole,
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
   ) {
-    return this.admin.actualizarUsuario(id, dto, adminId);
+    return this.admin.actualizarUsuario(id, dto, adminId, actorRole);
   }
 
   @Post('users/:id/password')
+  @Roles('admin', 'organizer')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Ponerle una contraseña nueva a alguien',
@@ -600,11 +611,16 @@ export class AdminController {
       '**Cierra todas sus sesiones.** Un reset que deja vivos los refresh tokens no sirve para ' +
       'lo único que se usa de verdad: sacar a quien no debería estar dentro.',
   })
-  cambiarPassword(@Param('id') id: string, @Body() dto: SetPasswordDto) {
-    return this.admin.cambiarPassword(id, dto.password);
+  cambiarPassword(
+    @CurrentUser('role') actorRole: UserRole,
+    @Param('id') id: string,
+    @Body() dto: SetPasswordDto,
+  ) {
+    return this.admin.cambiarPassword(id, dto.password, actorRole);
   }
 
   @Delete('users/:id')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Borrar una cuenta',
     description:
@@ -617,7 +633,11 @@ export class AdminController {
     type: ErrorResponseDto,
     description: 'CONFLICT: es tu propia cuenta',
   })
-  borrarUsuario(@CurrentUser('sub') adminId: string, @Param('id') id: string) {
-    return this.admin.borrarUsuario(id, adminId);
+  borrarUsuario(
+    @CurrentUser('sub') adminId: string,
+    @CurrentUser('role') actorRole: UserRole,
+    @Param('id') id: string,
+  ) {
+    return this.admin.borrarUsuario(id, adminId, actorRole);
   }
 }

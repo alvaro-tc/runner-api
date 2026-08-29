@@ -110,10 +110,14 @@ export class LocalStorageService extends StorageService {
    * subida real se caiga con un 500.
    */
   async assertWritable(): Promise<void> {
-    const sonda = join(this.root, `.write-test-${randomUUID()}`);
+    // La sonda va en un SUBDIRECTORIO nuevo, no en la raiz: el fallo real fue
+    // un `marathons/` copiado como root dentro de un uploads/ del usuario del
+    // servicio, y una sonda en la raiz daba `uploads: up` mientras cada subida
+    // de afiche respondia 503.
+    const sonda = join(this.root, '.write-test', `${randomUUID()}`);
 
     try {
-      await mkdir(this.root, { recursive: true });
+      await mkdir(dirname(sonda), { recursive: true });
       await writeFile(sonda, 'ok');
     } catch (error) {
       const causa = error as NodeJS.ErrnoException;
@@ -123,7 +127,7 @@ export class LocalStorageService extends StorageService {
           `(chown -R al usuario del servicio) y el ReadWritePaths de systemd.`,
       );
     } finally {
-      await rm(sonda, { force: true }).catch(() => undefined);
+      await rm(dirname(sonda), { force: true, recursive: true }).catch(() => undefined);
     }
   }
 

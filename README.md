@@ -155,8 +155,9 @@ Credenciales de prueba, tras `npm run db:seed`:
 | `runner@test.com` | runner | Cuatro meses de actividad: entrenamientos con GPS, plan de 21K a medias, 4 inscripciones, 3 zapatillas |
 | `runner2@test.com` | runner | Vacía a propósito: es con la que se comprueba que no ve los datos del otro |
 | `admin@test.com` | admin | Acceso a `/admin` y a `/api/v1/admin/*` |
+| `organizer@test.com` | organizer | Admin recortado: usuarios corredores y comprobantes QR. También `organizer2@` y `organizer3@` |
 
-Contraseña para las tres: `Test1234!`
+Contraseña para todas: `Test1234!`
 
 ## Conectar la app Flutter al backend local
 

@@ -3,7 +3,7 @@ import { log, prisma, titulo } from './comun';
 import type { Gender, UserRole } from '../../generated/prisma/enums';
 
 /**
- * Contrasena unica para los tres usuarios de prueba.
+ * Contrasena unica para todos los usuarios de prueba.
  *
  * Cumple la politica real (mayuscula, minuscula, digito y simbolo) a proposito:
  * si el seed pudiera crear una contrasena que el registro rechaza, el usuario
@@ -144,10 +144,66 @@ const USUARIOS: SemillaUsuario[] = [
     },
     preferencias: { locale: 'es-BO', notifications: {} },
   },
+  // Tres organizadores: admin recortado —usuarios y comprobantes de pago—, uno
+  // por ciudad para poder probar dos sesiones a la vez sin pisarse.
+  {
+    email: 'organizer@test.com',
+    ci: '2000001LP',
+    name: 'Lucia Mamani',
+    role: 'organizer',
+    perfil: {
+      city: 'La Paz',
+      birthDate: '1990-03-12',
+      gender: 'female',
+      weightGrams: 62000,
+      heightCm: 166,
+      defaultBibNumber: null,
+      injuryFlags: [],
+      avgSleepMinutes: null,
+      hydrationHabit: null,
+    },
+    preferencias: { locale: 'es-BO', notifications: {} },
+  },
+  {
+    email: 'organizer2@test.com',
+    ci: '2000002CB',
+    name: 'Rodrigo Ticona',
+    role: 'organizer',
+    perfil: {
+      city: 'Cochabamba',
+      birthDate: '1987-07-19',
+      gender: 'male',
+      weightGrams: 78000,
+      heightCm: 177,
+      defaultBibNumber: null,
+      injuryFlags: [],
+      avgSleepMinutes: null,
+      hydrationHabit: null,
+    },
+    preferencias: { locale: 'es-BO', notifications: {} },
+  },
+  {
+    email: 'organizer3@test.com',
+    ci: '2000003SC',
+    name: 'Andrea Suarez',
+    role: 'organizer',
+    perfil: {
+      city: 'Santa Cruz de la Sierra',
+      birthDate: '1994-11-05',
+      gender: 'female',
+      weightGrams: 59000,
+      heightCm: 168,
+      defaultBibNumber: null,
+      injuryFlags: [],
+      avgSleepMinutes: null,
+      hydrationHabit: null,
+    },
+    preferencias: { locale: 'es-BO', notifications: {} },
+  },
 ];
 
 /**
- * Crea los tres usuarios de prueba. Idempotente por email.
+ * Crea los usuarios de prueba. Idempotente por email.
  *
  * La contrasena se hashea con argon2 igual que en el registro real: sembrar un
  * hash pegado a mano ataria el seed a los parametros de hoy y dejaria de

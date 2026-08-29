@@ -24,6 +24,9 @@ datasource db {
 
 enum UserRole {
   runner
+  // Admin recortado: gestiona usuarios y valida comprobantes de pago, pero no
+  // toca maratones. Ver docs/api.md, seccion Administracion.
+  organizer
   admin
 }
 

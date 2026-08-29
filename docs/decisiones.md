@@ -2408,7 +2408,7 @@ se deshacen solas: volver al symlink anterior con el esquema ya migrado deja el
 código viejo hablando con tablas que no reconoce. Y el despliegue no es atómico
 de todos modos, porque el proceso se reinicia.
 
-Así que un solo checkout en `/srv/running-api/current`, y volver atrás es
+Así que un solo checkout en `/opt/running-api/current`, y volver atrás es
 `git checkout` del commit anterior más otra pasada de `release.sh`. Menos
 piezas, mismo resultado. Si algún día hay varias instancias detrás de un
 balanceador, esto se reconsidera.

@@ -49,9 +49,9 @@ escalar la API entera.
 ## 1. Usuario y directorios
 
 ```bash
-sudo adduser --system --group --home /srv/running-api paceup
-sudo mkdir -p /srv/running-api/current /srv/running-api/uploads /etc/running-api
-sudo chown -R paceup:paceup /srv/running-api
+sudo adduser --system --group --home /opt/running-api paceup
+sudo mkdir -p /opt/running-api/current /opt/running-api/uploads /etc/running-api
+sudo chown -R paceup:paceup /opt/running-api
 sudo chmod 750 /etc/running-api
 ```
 
@@ -64,7 +64,7 @@ escritura ahí (`ReadWritePaths`).
 > arranca igual (`mkdir -p` sobre un directorio que ya existe no falla) pero
 > **toda** subida de imagen responde 500: afiche, QR y avatar. Se comprueba con
 > `curl -s localhost:3000/ready | jq .data.checks.uploads` y se arregla con
-> `sudo chown -R paceup:paceup /srv/running-api/uploads`. `deploy/release.sh` ya
+> `sudo chown -R paceup:paceup /opt/running-api/uploads`. `deploy/release.sh` ya
 > lo corrige en cada publicación.
 
 ## 2. Paquetes
@@ -136,7 +136,7 @@ API_DOMAIN=api.tudominio.bo
 PUBLIC_BASE_URL=https://api.tudominio.bo
 CORS_ORIGINS=https://tudominio.bo
 DATABASE_URL=postgresql://paceup:LA-CLAVE@localhost:5432/paceup?schema=public
-UPLOADS_DIR=/srv/running-api/uploads
+UPLOADS_DIR=/opt/running-api/uploads
 LOG_PRETTY=false
 JWT_SECRET=<openssl rand -base64 48>
 PAYMENT_WEBHOOK_SECRET=<openssl rand -base64 32>
@@ -153,8 +153,8 @@ nombre exacto de la variable.
 ## 5. Código y primer arranque
 
 ```bash
-sudo -u paceup git clone https://github.com/alvaro-tc/running-api /srv/running-api/current
-cd /srv/running-api/current
+sudo -u paceup git clone https://github.com/alvaro-tc/running-api /opt/running-api/current
+cd /opt/running-api/current
 sudo -u paceup deploy/release.sh
 ```
 
@@ -225,7 +225,7 @@ sudo crontab -u postgres -e
 ```
 
 ```cron
-15 3 * * * /srv/running-api/current/scripts/backup-db.sh >> /var/log/paceup-backup.log 2>&1
+15 3 * * * /opt/running-api/current/scripts/backup-db.sh >> /var/log/paceup-backup.log 2>&1
 ```
 
 Volcado comprimido diario con rotación de 7 días. El script escribe a un temporal
@@ -236,7 +236,7 @@ bueno es peor que no tener backup.
 **Los avatares y las tarjetas de resultado no están en el volcado.** Son archivos:
 
 ```cron
-30 3 * * * tar -czf /var/backups/paceup/uploads-$(date +\%F).tar.gz -C /srv/running-api uploads
+30 3 * * * tar -czf /var/backups/paceup/uploads-$(date +\%F).tar.gz -C /opt/running-api uploads
 ```
 
 ### Restauración (probar, no suponer)
@@ -267,7 +267,7 @@ desechable, no el día del incendio.
 ## Actualizar
 
 ```bash
-cd /srv/running-api/current
+cd /opt/running-api/current
 sudo -u paceup git pull
 sudo -u paceup deploy/release.sh
 ```

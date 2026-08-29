@@ -664,7 +664,8 @@ mostrando el viejo.
 
 ## Administración
 
-Todo bajo `/api/v1/admin/*` y todo con rol `admin`. **Aquí vive la lógica del
+Todo bajo `/api/v1/admin/*` y todo con rol `admin`, salvo el puñado de rutas
+marcadas más abajo, que acepta también `organizer`. **Aquí vive la lógica del
 panel**, no en el panel: la página de `/admin` es un cliente más de estos
 endpoints, y el front-end web que venga después no tendrá que reimplementar ni
 una acción.
@@ -672,6 +673,41 @@ una acción.
 Límite propio de 60 peticiones/minuto: estos endpoints escriben configuración de
 precios, confirman cobros y exportan datos personales. Los usa una persona
 haciendo clic, no una app.
+
+### Roles
+
+| Rol | Qué puede |
+|---|---|
+| `runner` | Nada de `/admin/*`. Es el rol del registro público |
+| `organizer` | Administrar **cuentas de corredor** y validar **comprobantes de pago QR** |
+| `admin` | Todo |
+
+`organizer` es un admin recortado, pensado para quien atiende ventanilla el día
+de la carrera: resetea contraseñas y da por buenos los comprobantes, pero **no
+toca el producto**. En concreto, un organizador **no puede**:
+
+- crear, editar, publicar, despublicar ni borrar maratones;
+- subir el QR de cobro ni el afiche de una maratón;
+- abrir ni cerrar inscripciones, dar la largada ni cortar la carrera;
+- tocar categorías, extras, recorridos, el cargo por servicio ni los resultados;
+- confirmar transferencias bancarias (eso es cuadrar un extracto, no revisar
+  una captura);
+- **administrar cuentas que no sean `runner`**, ni asignar un rol distinto de
+  `runner`.
+
+Esa última línea es la que sostiene todo lo anterior: sin ella un organizador se
+daría `admin` a sí mismo, o resetearía la contraseña del admin y entraría como
+él —un reset de contraseña es una toma de cuenta con otro nombre—. Se comprueba
+en el servicio y no en el guard, porque lo que decide no es *qué* endpoint es
+sino **sobre quién** se ejecuta, y eso solo se sabe leyendo la cuenta objetivo.
+Al intentarlo salta `INSUFFICIENT_ROLE` (`403`).
+
+Un organizador lo crea un admin desde `POST /admin/users` o `PUT /admin/users/:id`.
+
+En el panel web, quien entra con `organizer` solo ve las pestañas **Comprobantes
+QR** y **Usuarios**, y en el desplegable de rol solo le aparece `runner`.
+Esconder el resto no es la protección —esa la ponen los guards—: es no ofrecer
+botones que van a devolver `403`.
 
 ### Endpoints
 
@@ -705,12 +741,20 @@ POST   /admin/payments/:id/confirm-transfer
 POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal
 POST   /admin/marathons/:id/recalculate-ranks
 
-GET    /admin/users?q=
-POST   /admin/users                                ← única forma de crear un admin
-PUT    /admin/users/:id
-POST   /admin/users/:id/password                   ← cierra todas sus sesiones
-DELETE /admin/users/:id
+GET    /admin/users?q=                             ← admin | organizer
+POST   /admin/users                                ← admin | organizer · única forma de crear un admin
+PUT    /admin/users/:id                            ← admin | organizer
+POST   /admin/users/:id/password                   ← admin | organizer · cierra todas sus sesiones
+DELETE /admin/users/:id                            ← admin | organizer
+
+GET    /admin/payment-proofs                       ← admin | organizer · ver docs/pago-qr-manual.md
+POST   /admin/payment-proofs/:id/approve           ← admin | organizer
+POST   /admin/payment-proofs/:id/reject            ← admin | organizer
 ```
+
+Las marcadas `admin | organizer` son **todo** lo que alcanza un organizador; el
+resto de la lista le devuelve `403`. Sobre las de usuarios pesa además el techo
+de la sección anterior: solo cuentas `runner`.
 
 ### El cargo por servicio y su vista previa
 
@@ -801,6 +845,10 @@ entraron.
 El email queda **verificado** salvo que se mande `verified: false`: una cuenta
 creada a mano ya pasó por una persona, y dejarla sin verificar la deja a medio
 camino sin que nadie le haya mandado el correo.
+
+Un organizador puede usar estos cinco endpoints, pero **solo contra cuentas
+`runner`** y sin repartir otro rol que `runner`: contra un admin u otro
+organizador responden `INSUFFICIENT_ROLE` (`403`).
 
 Un admin no puede quitarse a sí mismo el rol ni borrarse desde el panel
 (`CONFLICT` en ambos): lo primero dejaría el panel sin nadie que pueda entrar y

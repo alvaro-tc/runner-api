@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
+  IsEnum,
+  IsISO8601,
   IsNotEmpty,
   IsOptional,
   IsString,
@@ -10,6 +12,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { Gender } from '../../../../generated/prisma/enums';
 
 /**
  * Reglas de contrasena.
@@ -95,6 +98,16 @@ export class RegisterDto extends DeviceDto {
   @MaxLength(120)
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   name!: string;
+
+  @ApiPropertyOptional({ example: '1995-04-17', description: 'Fecha ISO. Va al perfil.' })
+  @IsOptional()
+  @IsISO8601({ strict: true })
+  birthDate?: string;
+
+  @ApiPropertyOptional({ enum: Gender })
+  @IsOptional()
+  @IsEnum(Gender)
+  gender?: Gender;
 }
 
 /**
@@ -210,7 +223,7 @@ export class AuthUserDto {
   @ApiProperty()
   name!: string;
 
-  @ApiProperty({ enum: ['runner', 'admin'] })
+  @ApiProperty({ enum: ['runner', 'organizer', 'admin'] })
   role!: string;
 
   @ApiProperty({

@@ -4,7 +4,7 @@
 #
 # Cron (diario a las 03:15, hora del VPS):
 #   sudo crontab -u postgres -e
-#   15 3 * * * /srv/running-api/current/scripts/backup-db.sh >> /var/log/paceup-backup.log 2>&1
+#   15 3 * * * /opt/running-api/current/scripts/backup-db.sh >> /var/log/paceup-backup.log 2>&1
 #
 # Restauracion (probada, ver docs/despliegue.md):
 #   sudo -u postgres dropdb paceup && sudo -u postgres createdb -O paceup paceup

@@ -68,7 +68,12 @@ export class AuthService {
         ci,
         passwordHash,
         name: dto.name,
-        profile: { create: {} },
+        profile: {
+          create: {
+            birthDate: dto.birthDate ? new Date(dto.birthDate) : null,
+            ...(dto.gender ? { gender: dto.gender } : {}),
+          },
+        },
         preferences: { create: {} },
       },
       include: { preferences: true },

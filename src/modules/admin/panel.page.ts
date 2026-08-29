@@ -86,6 +86,10 @@ export function panelHtml(nonce: string): string {
 <script nonce="${nonce}">
 const API = '/api/v1';
 let token = sessionStorage.getItem('paceup_admin_token') || '';
+// El rol decide que pestanas se pintan. Se guarda al lado del token porque al
+// recargar la pagina no hay login del que sacarlo, y sin el el organizador
+// veria un menu que la API le va a negar entero.
+let rol = sessionStorage.getItem('paceup_admin_role') || 'admin';
 
 // ─── Utilidades ──────────────────────────────────────────────────────────────
 
@@ -167,10 +171,14 @@ async function entrar(identifier, password) {
   });
   const cuerpo = await res.json();
   if (!res.ok) throw new Error(cuerpo?.error?.message || 'No se pudo entrar');
-  if (cuerpo.data.user.role !== 'admin') throw new Error('Esa cuenta no es de administrador');
+  if (cuerpo.data.user.role !== 'admin' && cuerpo.data.user.role !== 'organizer') {
+    throw new Error('Esa cuenta no tiene acceso al panel');
+  }
 
   token = cuerpo.data.accessToken;
+  rol = cuerpo.data.user.role;
   sessionStorage.setItem('paceup_admin_token', token);
+  sessionStorage.setItem('paceup_admin_role', rol);
   $('#who').textContent = cuerpo.data.user.email;
 
   arrancar();
@@ -179,6 +187,7 @@ async function entrar(identifier, password) {
 function salir() {
   token = '';
   sessionStorage.removeItem('paceup_admin_token');
+  sessionStorage.removeItem('paceup_admin_role');
   $('#app').style.display = 'none';
   $('#login').style.display = 'block';
 }
@@ -197,6 +206,21 @@ const PESTANAS = [
   ['Usuarios', vistaUsuarios],
 ];
 
+/**
+ * Lo unico que ve un organizador: comprobantes y usuarios.
+ *
+ * Esconder el resto no es la seguridad —eso lo hacen los guards de la API—, es no
+ * ofrecer botones que van a devolver 403. La lista se filtra por nombre para
+ * que agregar una pestana nueva la deje fuera por omision.
+ */
+const PESTANAS_ORGANIZADOR = ['Comprobantes QR', 'Usuarios'];
+
+function pestanas() {
+  return rol === 'organizer'
+    ? PESTANAS.filter(([nombre]) => PESTANAS_ORGANIZADOR.includes(nombre))
+    : PESTANAS;
+}
+
 let actual = 0;
 
 /**
@@ -212,7 +236,7 @@ let manejadorClic = null;
 $('#view').addEventListener('click', (ev) => { if (manejadorClic) manejadorClic(ev); });
 
 function pintarTabs() {
-  $('#tabs').innerHTML = PESTANAS
+  $('#tabs').innerHTML = pestanas()
     .map(([nombre], i) => '<button class="' + (i === actual ? 'on' : '') + '" data-i="' + i + '">' + nombre + '</button>')
     .join('');
 }
@@ -220,7 +244,7 @@ function pintarTabs() {
 async function abrir(i) {
   actual = i;
   pintarTabs();
-  await pintar(PESTANAS[i][1]);
+  await pintar(pestanas()[i][1]);
 }
 
 /** Pinta una vista en el contenedor, soltando antes el manejador de la anterior. */
@@ -976,7 +1000,12 @@ async function vistaResultados() {
 
 // ─── Usuarios ────────────────────────────────────────────────────────────────
 
-const ROLES = ['runner', 'admin'];
+const ROLES = ['runner', 'organizer', 'admin'];
+
+/** Un organizador solo reparte el rol de corredor; la API rechaza lo demas. */
+function rolesAsignables() {
+  return rol === 'organizer' ? ['runner'] : ROLES;
+}
 
 /**
  * Usuarios: alta, edicion en la propia fila y baja.
@@ -993,7 +1022,10 @@ async function vistaUsuarios(busqueda) {
       '<td><input data-u-email="' + u.id + '" value="' + esc(u.email) + '" style="width:220px"></td>' +
       '<td><input data-u-name="' + u.id + '" value="' + esc(u.name) + '" style="width:180px"></td>' +
       '<td><select data-u-role="' + u.id + '">' +
-        ROLES.map((r) => '<option value="' + r + '"' + (u.role === r ? ' selected' : '') + '>' + r + '</option>').join('') +
+        // Si el rol actual no esta entre los asignables se pinta el suyo y
+        // nada mas: un organizador mirando a un admin no debe ver un desplegable
+        // que dice "runner" sobre una cuenta que no lo es.
+        (rolesAsignables().includes(u.role) ? rolesAsignables() : [u.role]).map((r) => '<option value="' + r + '"' + (u.role === r ? ' selected' : '') + '>' + r + '</option>').join('') +
       '</select></td>' +
       '<td><select data-u-verified="' + u.id + '">' +
         '<option value="true"' + (u.verified ? ' selected' : '') + '>sí</option>' +
@@ -1016,7 +1048,7 @@ async function vistaUsuarios(busqueda) {
         '<label>Email<input id="nuEmail" type="email" required style="width:220px"></label>' +
         '<label>Nombre<input id="nuName" required style="width:180px"></label>' +
         '<label>Contraseña<input id="nuPassword" type="password" required minlength="8" style="width:170px"></label>' +
-        '<label>Rol<select id="nuRole">' + ROLES.map((r) => '<option>' + r + '</option>').join('') + '</select></label>' +
+        '<label>Rol<select id="nuRole">' + rolesAsignables().map((r) => '<option>' + r + '</option>').join('') + '</select></label>' +
         '<button class="act" type="submit">Crear usuario</button>' +
       '</div>' +
       '<span class="muted">Mínimo 8 caracteres, con al menos una letra y un número. El email queda verificado.</span>' +

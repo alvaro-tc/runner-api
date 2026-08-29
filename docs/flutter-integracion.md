@@ -288,7 +288,9 @@ Todo el flujo, en [`pago-qr-manual.md`](./pago-qr-manual.md).
 
 `runner@test.com` · `runner2@test.com` · `admin@test.com`, contraseña
 `Test1234!`. Sus CI son `6789012LP`, `5544332CB` y `1000001LP`: sirven para
-entrar por el mismo campo que el correo.
+entrar por el mismo campo que el correo. Hay además tres organizadores
+(`organizer@test.com`, `organizer2@`, `organizer3@`; CI `2000001LP`,
+`2000002CB`, `2000003SC`) con la misma contraseña.
 
 `runner@test.com` es el único con actividad sembrada: cuatro meses de
 entrenamientos con GPS, un plan de 21K a mitad de camino, cuatro inscripciones

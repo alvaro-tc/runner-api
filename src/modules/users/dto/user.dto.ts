@@ -187,7 +187,7 @@ export class MeDto {
   @ApiProperty()
   name!: string;
 
-  @ApiProperty({ enum: ['runner', 'admin'] })
+  @ApiProperty({ enum: ['runner', 'organizer', 'admin'] })
   role!: string;
 
   @ApiProperty({

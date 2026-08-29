@@ -18,7 +18,7 @@ Wants=network-online.target
 Type=simple
 User=paceup
 Group=paceup
-WorkingDirectory=/srv/running-api/current
+WorkingDirectory=/opt/running-api/current
 
 # Fuera del repo y con permisos 600: aqui viven JWT_SECRET, la contrasena de
 # Postgres y el secreto del webhook de pagos.
@@ -52,7 +52,7 @@ ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-ReadWritePaths=/srv/running-api/uploads
+ReadWritePaths=/opt/running-api/uploads
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true

@@ -1015,7 +1015,41 @@ export class AdminService {
    * (`hashPassword`), no una copia local: dos juegos de parametros distintos
    * darian cuentas con seguridad distinta segun por donde entraron.
    */
-  async crearUsuario(dto: CreateUserDto) {
+  /**
+   * Techo del rol `organizer`.
+   *
+   * Un organizador administra corredores y nada mas: no puede tocar la cuenta
+   * de un admin ni de otro organizador, ni repartir esos roles. Sin esta
+   * comprobacion el organizador podria darse `admin` a si mismo o resetear la
+   * contrasena del admin y entrar como el — el reset de contrasenas es una
+   * toma de cuenta con otro nombre.
+   *
+   * Va en el servicio y no en el guard porque lo que decide no es el endpoint
+   * sino **sobre quien** se ejecuta, y eso solo se sabe leyendo el objetivo.
+   */
+  private techoDeOrganizador(actorRole: UserRole, objetivo?: UserRole, rolPedido?: UserRole) {
+    if (actorRole !== UserRole.organizer) return;
+
+    if (objetivo && objetivo !== UserRole.runner) {
+      throw new AppException(
+        ErrorCode.INSUFFICIENT_ROLE,
+        'Un organizador solo puede administrar cuentas de corredor',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    if (rolPedido && rolPedido !== UserRole.runner) {
+      throw new AppException(
+        ErrorCode.INSUFFICIENT_ROLE,
+        'Un organizador solo puede asignar el rol de corredor',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+  }
+
+  async crearUsuario(dto: CreateUserDto, actorRole: UserRole) {
+    this.techoDeOrganizador(actorRole, undefined, dto.role);
+
     const existente = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { id: true },
@@ -1055,8 +1089,15 @@ export class AdminService {
    * nadie que pueda entrar, y recuperarlo requiere tocar la base a mano. Que lo
    * haga otro admin, que es la comprobacion que ya existe de verdad.
    */
-  async actualizarUsuario(userId: string, dto: UpdateUserDto, adminUserId: string) {
+  async actualizarUsuario(
+    userId: string,
+    dto: UpdateUserDto,
+    adminUserId: string,
+    actorRole: UserRole,
+  ) {
     const actual = await this.buscarUsuario(userId);
+
+    this.techoDeOrganizador(actorRole, actual.role, dto.role);
 
     if (dto.role && dto.role !== UserRole.admin && userId === adminUserId) {
       throw new AppException(
@@ -1104,8 +1145,10 @@ export class AdminService {
    * dentro—, porque el intruso sigue renovando su token sin saber la contrasena
    * nueva.
    */
-  async cambiarPassword(userId: string, password: string) {
+  async cambiarPassword(userId: string, password: string, actorRole: UserRole) {
     const usuario = await this.buscarUsuario(userId);
+
+    this.techoDeOrganizador(actorRole, usuario.role);
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -1135,7 +1178,7 @@ export class AdminService {
    * Un admin no puede borrarse a si mismo desde el panel: para eso esta el
    * borrado de cuenta propio, que pide confirmacion del dueno.
    */
-  async borrarUsuario(userId: string, adminUserId: string) {
+  async borrarUsuario(userId: string, adminUserId: string, actorRole: UserRole) {
     if (userId === adminUserId) {
       throw new AppException(
         ErrorCode.CONFLICT,
@@ -1145,6 +1188,8 @@ export class AdminService {
     }
 
     const usuario = await this.buscarUsuario(userId);
+    this.techoDeOrganizador(actorRole, usuario.role);
+
     await this.users.borrarCuenta(userId);
 
     this.logger.warn(`Cuenta ${usuario.email} borrada desde el panel por ${adminUserId}`);

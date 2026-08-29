@@ -187,13 +187,18 @@ Variables de entorno:
 Límite: 5 peticiones por minuto y por IP. Este endpoint **crea cuentas sin
 token**; sin techo es una fábrica de usuarios.
 
-### Organizador (rol `admin`)
+### Organizador (rol `admin` u `organizer`)
 
 | Método | Ruta | Qué hace |
 |---|---|---|
 | `GET` | `/admin/payment-proofs` | Cola de revisión, del más viejo al más nuevo |
 | `POST` | `/admin/payment-proofs/:id/approve` | Acredita el cobro y confirma la inscripción |
 | `POST` | `/admin/payment-proofs/:id/reject` | Rechaza con motivo. El cobro **sigue abierto** |
+
+Validar comprobantes es justo para lo que existe el rol `organizer`: mira la
+captura y dice si cuadra. El QR de cobro de la maratón lo sigue subiendo un
+`admin` —cambiarlo es cambiar a qué cuenta va el dinero—. Ver la sección
+*Roles* en `docs/api.md`.
 
 ## 7. Decisiones que parecen raras y no lo son
 

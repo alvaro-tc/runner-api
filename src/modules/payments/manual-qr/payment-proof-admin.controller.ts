@@ -16,13 +16,17 @@ const LIMITE_ADMIN = { corto: { limit: 60, ttl: 60_000 } };
  * Vive bajo `/admin/*` como el resto del panel, pero en esta carpeta y no en
  * `AdminController`: el flujo entero se borra borrando `manual-qr/`.
  *
- * `@Roles('admin')` va **en la clase**. Un metodo nuevo que se olvidara el
- * decorador quedaria abierto a cualquier usuario logueado, y aqui lo que se
- * decide es si alguien pago o no.
+ * `@Roles` va **en la clase**. Un metodo nuevo que se olvidara el decorador
+ * quedaria abierto a cualquier usuario logueado, y aqui lo que se decide es si
+ * alguien pago o no.
+ *
+ * Entra tambien `organizer`: validar comprobantes es justo el trabajo que ese
+ * rol existe para hacer. No toca la maraton ni su QR de cobro —eso sigue
+ * siendo de `admin`—, solo dice si una captura cuadra con el extracto.
  */
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
-@Roles('admin')
+@Roles('admin', 'organizer')
 @Throttle(LIMITE_ADMIN)
 @Controller('admin/payment-proofs')
 export class PaymentProofAdminController {
