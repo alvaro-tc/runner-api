@@ -49,9 +49,9 @@ escalar la API entera.
 ## 1. Usuario y directorios
 
 ```bash
-sudo adduser --system --group --home /opt/running-api paceup
+sudo adduser --system --group --home /opt/running-api deploy
 sudo mkdir -p /opt/running-api/current /opt/running-api/uploads /etc/running-api
-sudo chown -R paceup:paceup /opt/running-api
+sudo chown -R deploy:deploy /opt/running-api
 sudo chmod 750 /etc/running-api
 ```
 
@@ -59,13 +59,22 @@ sudo chmod 750 /etc/running-api
 tocar los avatares de los usuarios, y el servicio systemd solo tiene permiso de
 escritura ahí (`ReadWritePaths`).
 
-> **Ojo con el propietario de `uploads/`.** Si el directorio acaba siendo de
-> `root` —lo típico es copiar ahí unas imágenes a mano con `sudo`—, la API
-> arranca igual (`mkdir -p` sobre un directorio que ya existe no falla) pero
-> **toda** subida de imagen responde 500: afiche, QR y avatar. Se comprueba con
-> `curl -s localhost:3000/ready | jq .data.checks.uploads` y se arregla con
-> `sudo chown -R paceup:paceup /opt/running-api/uploads`. `deploy/release.sh` ya
-> lo corrige en cada publicación.
+> **Ojo con el propietario de `uploads/` y de cada subcarpeta.** Si acaban
+> siendo de `root` —lo típico es copiar ahí imágenes a mano con `sudo`, o correr
+> `npm run db:seed` como root, que crea `uploads/marathons/qr`—, la API arranca
+> igual (`mkdir -p` sobre un directorio que ya existe no falla) pero las subidas
+> que caen en esa carpeta responden 503, y solo esas: pasó en producción con
+> `marathons/` de root, con los avatares subiendo sin problema.
+>
+> El arranque audita ahora los subdirectorios existentes y nombra el culpable en
+> el log; en caliente se ve con
+> `curl -s localhost:3000/ready | jq .data.checks.uploads`. Se arregla con
+> `sudo chown -R deploy:deploy /opt/running-api/uploads`, que es lo que
+> `deploy/release.sh` hace en cada publicación.
+>
+> **Regla:** nada dentro de `uploads/` se crea con `sudo`. Las carpetas de un
+> campo de imagen nuevo las crea el propio proceso al guardar el primer archivo,
+> y así nacen con el dueño correcto.
 
 ## 2. Paquetes
 
@@ -123,7 +132,7 @@ Redis igual: `bind 127.0.0.1 ::1` en `/etc/redis/redis.conf`.
 
 ```bash
 sudo cp .env.example /etc/running-api/.env.production
-sudo chown root:paceup /etc/running-api/.env.production
+sudo chown root:deploy /etc/running-api/.env.production
 sudo chmod 640 /etc/running-api/.env.production
 sudo nano /etc/running-api/.env.production
 ```
@@ -153,9 +162,9 @@ nombre exacto de la variable.
 ## 5. Código y primer arranque
 
 ```bash
-sudo -u paceup git clone https://github.com/alvaro-tc/running-api /opt/running-api/current
+sudo -u deploy git clone https://github.com/alvaro-tc/running-api /opt/running-api/current
 cd /opt/running-api/current
-sudo -u paceup deploy/release.sh
+sudo -u deploy deploy/release.sh
 ```
 
 El script instala dependencias, genera el cliente de Prisma, compila, aplica
@@ -165,7 +174,7 @@ Si no responde en 30 s, imprime el log y sale con error.
 Para que `release.sh` pueda reiniciar el servicio sin ser root:
 
 ```bash
-echo 'paceup ALL=(root) NOPASSWD: /bin/systemctl restart running-api, /bin/journalctl -u running-api *' \
+echo 'deploy ALL=(root) NOPASSWD: /bin/systemctl restart running-api, /bin/journalctl -u running-api *' \
   | sudo tee /etc/sudoers.d/paceup-deploy
 sudo chmod 440 /etc/sudoers.d/paceup-deploy
 ```
@@ -268,8 +277,8 @@ desechable, no el día del incendio.
 
 ```bash
 cd /opt/running-api/current
-sudo -u paceup git pull
-sudo -u paceup deploy/release.sh
+sudo -u deploy git pull
+sudo -u deploy deploy/release.sh
 ```
 
 El `git pull` es manual a propósito: qué se publica es una decisión, no algo que
@@ -309,12 +318,12 @@ de que exista la del mes antes de escribir. No hace falta cron para eso.
       de sshd activa.
 - [ ] Postgres y Redis escuchando solo en localhost. Verifícalo de verdad:
       `sudo ss -lntp | grep -E '5432|6379'` debe mostrar `127.0.0.1`.
-- [ ] `/etc/running-api/.env.production` en `640 root:paceup`. No está en el repo
+- [ ] `/etc/running-api/.env.production` en `640 root:deploy`. No está en el repo
       y no debe estarlo.
 - [ ] `JWT_SECRET` y `PAYMENT_WEBHOOK_SECRET` generados en este servidor, no
       copiados de desarrollo.
 - [ ] `CORS_ORIGINS` con dominios explícitos.
-- [ ] La API corre como `paceup`, nunca como root.
+- [ ] La API corre como `deploy`, nunca como root.
 - [ ] Actualizaciones de seguridad automáticas:
       `sudo apt install unattended-upgrades`.
 - [ ] Backups corriendo **y una restauración probada**.

@@ -4,7 +4,7 @@
 #
 #   cd /opt/running-api/current
 #   git pull            # <- lo hace el operador, a mano y a conciencia
-#   sudo -u paceup deploy/release.sh
+#   sudo -u deploy deploy/release.sh
 #
 # El script no toca git a proposito: decidir QUE se despliega es una decision
 # humana. Un script que hace `git pull` solo publica lo ultimo que alguien
@@ -34,7 +34,7 @@ echo "▸ Desplegando $(git rev-parse --short HEAD 2>/dev/null || echo 'sin git'
 # ya se sabe quien corre el servicio.
 echo "▸ Directorio de subidas"
 UPLOADS_DIR="${UPLOADS_DIR:-/opt/running-api/uploads}"
-SERVICE_USER="${SERVICE_USER:-$(id -un)}"
+SERVICE_USER="${SERVICE_USER:-deploy}"
 sudo mkdir -p "$UPLOADS_DIR"
 sudo chown -R "$SERVICE_USER":"$SERVICE_USER" "$UPLOADS_DIR"
 sudo chmod -R u+rwX "$UPLOADS_DIR"

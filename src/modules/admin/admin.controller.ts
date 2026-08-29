@@ -80,11 +80,12 @@ const LIMITE_ADMIN = { corto: { limit: 60, ttl: 60_000 } };
  * queda abierto a cualquier usuario logueado: por eso el decorador va **en la
  * clase**, no en cada metodo.
  *
- * La excepcion es el bloque de **usuarios**, que lleva su propio `@Roles` para
- * dejar entrar tambien a `organizer`. El decorador de metodo sobrescribe al de
- * la clase, asi que ampliar el acceso es explicito y visible endpoint por
- * endpoint; lo demas —maratones, recorridos, precios, resultados— se queda en
- * `admin` por no llevar nada.
+ * Las excepciones son el bloque de **usuarios** y el de **inscripciones y
+ * pagos** —quien valida las transferencias del dia a dia es el organizador—,
+ * que llevan su propio `@Roles` para dejar entrar tambien a `organizer`. El
+ * decorador de metodo sobrescribe al de la clase, asi que ampliar el acceso es
+ * explicito y visible endpoint por endpoint; lo demas —maratones, recorridos,
+ * precios, resultados— se queda en `admin` por no llevar nada.
  */
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
@@ -492,6 +493,7 @@ export class AdminController {
   // ─── Inscripciones y pagos ───────────────────────────────────────────────
 
   @Get('registrations')
+  @Roles('admin', 'organizer')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: RegistrationStatus })
   @ApiOperation({ summary: 'Últimas inscripciones, filtrables' })
@@ -503,6 +505,7 @@ export class AdminController {
   }
 
   @Get('payments/pending-transfers')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Transferencias esperando confirmación manual',
     description: 'La bandeja de trabajo del admin: quién pagó por banco y falta darle el visto.',
@@ -512,6 +515,7 @@ export class AdminController {
   }
 
   @Post('payments/:id/confirm-transfer')
+  @Roles('admin', 'organizer')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Dar por cobrada una transferencia bancaria',

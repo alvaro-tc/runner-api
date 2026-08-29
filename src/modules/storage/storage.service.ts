@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
@@ -129,6 +130,51 @@ export class LocalStorageService extends StorageService {
     } finally {
       await rm(dirname(sonda), { force: true, recursive: true }).catch(() => undefined);
     }
+
+    // Una sonda en la raiz no basta: el fallo real fue un `marathons/` de root
+    // DENTRO de un uploads/ del usuario del servicio, y eso daba `uploads: up`
+    // mientras cada subida de afiche respondia 503. Los subdirectorios que ya
+    // existen se comprueban uno a uno; los que cree el propio proceso (una
+    // carpeta nueva por un campo de imagen nuevo) nacen con el dueno correcto.
+    const ajenos = await this.subdirectoriosNoEscribibles(this.root, 2);
+    if (ajenos.length) {
+      throw new Error(
+        `Subdirectorios de UPLOADS_DIR (${this.root}) no escribibles por este proceso: ` +
+          `${ajenos.join(', ')}. Suelen ser carpetas creadas con sudo (seed o copia a mano); ` +
+          `se arregla con chown -R al usuario del servicio.`,
+      );
+    }
+  }
+
+  /**
+   * Subdirectorios sin permiso de escritura, hasta `profundidad` niveles.
+   *
+   * ponytail: se corta a 2 niveles a proposito. Ahi viven las carpetas que crea
+   * una persona (`marathons/qr`, `avatars`); mas abajo solo hay directorios por
+   * id que crea el proceso, y recorrerlos en cada `/ready` seria un stat por
+   * usuario. Si algun dia hace falta, subir el numero es el unico cambio.
+   */
+  private async subdirectoriosNoEscribibles(dir: string, profundidad: number): Promise<string[]> {
+    if (profundidad <= 0) return [];
+
+    const entradas = await readdir(dir, { withFileTypes: true }).catch(() => []);
+    const hijos = entradas.filter((e) => e.isDirectory() && e.name !== '.write-test');
+
+    const resultados = await Promise.all(
+      hijos.map(async (hijo) => {
+        const ruta = join(dir, hijo.name);
+        const escribible = await access(ruta, constants.W_OK | constants.X_OK).then(
+          () => true,
+          () => false,
+        );
+
+        // Si no se puede escribir en el, bajar no aporta: se arregla con un
+        // `chown -R` que arrastra a los hijos igualmente.
+        return escribible ? this.subdirectoriosNoEscribibles(ruta, profundidad - 1) : [ruta];
+      }),
+    );
+
+    return resultados.flat();
   }
 
   /**
