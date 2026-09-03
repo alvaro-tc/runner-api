@@ -38,14 +38,21 @@ export class ResponseEnvelopeInterceptor<T> implements NestInterceptor<T, Envelo
 
     const req = context.switchToHttp().getRequest<Request>();
 
-    return next
-      .handle()
-      .pipe(
-        map((data) =>
-          data instanceof Paginated
-            ? { data: data.items as T, meta: { ...buildMeta(req), nextCursor: data.nextCursor } }
-            : { data, meta: buildMeta(req) },
-        ),
-      );
+    return next.handle().pipe(
+      map((data) =>
+        data instanceof Paginated
+          ? {
+              data: data.items as T,
+              meta: {
+                ...buildMeta(req),
+                nextCursor: data.nextCursor,
+                ...(data.total === undefined
+                  ? {}
+                  : { total: data.total, page: data.page, pageSize: data.pageSize }),
+              },
+            }
+          : { data, meta: buildMeta(req) },
+      ),
+    );
   }
 }

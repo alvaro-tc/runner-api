@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { LiveService } from '../realtime/live.service';
+import { WorkoutSessionsService } from '../workouts/workout-sessions.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { PositionSource, TrackingSessionStatus } from '../../../generated/prisma/enums';
@@ -43,6 +44,7 @@ export class TrackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly live: LiveService,
+    private readonly sesiones: WorkoutSessionsService,
   ) {}
 
   /**
@@ -124,9 +126,41 @@ export class TrackingService {
     // Despues de guardar y nunca antes: lo que no puede perderse es el punto
     // en la base. `publicar` no lanza —si el mapa se cae, el lote ya esta a
     // salvo— y el throttling decide dentro si esto llega a emitir algo.
-    await this.live.publicar(sesion, validos);
+    const llego = await this.live.publicar(sesion, validos);
+
+    if (llego) await this.cerrarPorLlegada(sesion);
 
     return { accepted, duplicated: validos.length - accepted, rejected, reasons };
+  }
+
+  /**
+   * Cierra la carrera de quien acaba de cruzar la meta.
+   *
+   * **Lo cierra el servidor y no el movil** porque el movil puede no estar en
+   * condiciones de hacerlo: la pantalla apagada en el bolsillo, la app matada
+   * por el sistema tras cuatro horas, el telefono sin bateria en el arco. El
+   * corredor cruzo la meta de verdad y su resultado no puede depender de que su
+   * telefono siga vivo para avisar. Con Traccar subiendo por su cuenta, la app
+   * puede llevar horas sin ejecutar una linea.
+   *
+   * Es el **mismo** cierre que llama el boton de finalizar: consolida las
+   * metricas, cuelga las posiciones del entrenamiento y produce el resultado
+   * oficial. Un segundo camino con sus propias reglas es como se acaba con dos
+   * tiempos distintos para la misma carrera.
+   *
+   * No propaga: el lote ya esta guardado, y devolver un 500 a la ingesta por
+   * esto haria que el movil reintentara el mismo lote en bucle.
+   */
+  private async cerrarPorLlegada(sesion: SesionDeIngesta): Promise<void> {
+    try {
+      await this.sesiones.finalizar(sesion.userId, sesion.id, {});
+      this.logger.log(`Carrera cerrada por llegada detectada: sesion ${sesion.id}`);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, sessionId: sesion.id },
+        'No se pudo cerrar la sesion tras detectar la llegada; los puntos se guardaron igual',
+      );
+    }
   }
 
   /**

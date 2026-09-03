@@ -24,8 +24,10 @@ datasource db {
 
 enum UserRole {
   runner
-  // Admin recortado: gestiona usuarios y valida comprobantes de pago, pero no
-  // toca maratones. Ver docs/api.md, seccion Administracion.
+  // Admin recortado: gestiona corredores y valida los cobros. Ve las maratones
+  // y su mapa en vivo —sin eso no sabria a que carrera pertenece el pago que
+  // esta validando— pero no las crea, ni las edita, ni les da la largada.
+  // Ver docs/api.md, seccion Administracion.
   organizer
   admin
 }
@@ -172,7 +174,7 @@ enum PositionSource {
 // ═══════════════════════════════════════════════════════════════════════════
 
 model User {
-  id              String    @id @default(cuid())
+  id                 String    @id @default(cuid())
   /// **Opcional**: hay corredores que se inscriben solo con su CI. Un usuario
   /// tiene que tener al menos uno de los dos, y eso lo garantiza el codigo
   /// (`AuthService`/`AdminService`), no la BD: un CHECK aqui bloquearia el
@@ -180,23 +182,23 @@ model User {
   ///
   /// citext: la comparacion es insensible a mayusculas, asi que
   /// `Ana@Mail.com` y `ana@mail.com` son el mismo usuario a nivel de BD.
-  email           String?   @unique @db.Citext
+  email              String?   @unique @db.Citext
   /// Cedula de identidad. Es la **otra** credencial de acceso: se puede entrar
   /// con email o con CI, y es la clave con la que la web de inscripcion cruza
   /// un pago con la cuenta que ya existe en la app.
-  ci              String?   @unique
-  passwordHash    String
+  ci                 String?   @unique
+  passwordHash       String
   /// El usuario entro con una contrasena que no eligio el (alta desde la web:
   /// usuario CI, contrasena CI). La app le exige cambiarla antes de dejarle
   /// hacer nada. Ver `docs/pago-qr-manual.md`.
-  mustChangePassword Boolean @default(false)
-  name            String
-  role            UserRole  @default(runner)
-  emailVerifiedAt DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  mustChangePassword Boolean   @default(false)
+  name               String
+  role               UserRole  @default(runner)
+  emailVerifiedAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
   /// Borrado de cuenta: se conserva la fila hasta purgar en diferido.
-  deletedAt       DateTime?
+  deletedAt          DateTime?
 
   profile             UserProfile?
   preferences         UserPreferences?
@@ -211,6 +213,8 @@ model User {
   positions           Position[]
   feeConfigsUpdated   ServiceFeeConfig[]   @relation("ServiceFeeUpdatedBy")
   proofsReviewed      PaymentProof[]       @relation("ProofReviewedBy")
+  paymentsConfirmed   Payment[]            @relation("PaymentConfirmedBy")
+  paymentsRefunded    Payment[]            @relation("PaymentRefundedBy")
 
   @@index([role])
   @@map("users")
@@ -277,14 +281,14 @@ model Shoe {
 
   /// Se acumula solo: al consolidar un workout se suma su distancia a la
   /// zapatilla principal de ese momento.
-  distanceMeters Int @default(0)
+  distanceMeters       Int @default(0)
   /// Default 800 km. Al superarlo se emite `shoe.wear_alert`.
   alertThresholdMeters Int @default(800000)
 
-  isPrimary  Boolean   @default(false)
-  retiredAt  DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  isPrimary Boolean   @default(false)
+  retiredAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
 
   @@index([userId, isPrimary])
   @@map("shoes")
@@ -305,10 +309,10 @@ model AuthSession {
   ip               String?
   userAgent        String?
 
-  expiresAt   DateTime
-  revokedAt   DateTime?
-  lastUsedAt  DateTime  @default(now())
-  createdAt   DateTime  @default(now())
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  lastUsedAt DateTime  @default(now())
+  createdAt  DateTime  @default(now())
 
   /// Cadena de rotacion. Si llega un token ya rotado, se revoca la cadena
   /// entera de ese dispositivo: es senal de robo del token.
@@ -433,7 +437,7 @@ model Marathon {
   priceCents Int
   currency   String @default("BOB")
 
-  registrationStatus  MarathonRegistrationStatus @default(open)
+  registrationStatus   MarathonRegistrationStatus @default(open)
   registrationClosesAt DateTime?
 
   /// Recorrido como GeoJSON. Se envia simplificado al movil. Es una **copia**
@@ -443,9 +447,9 @@ model Marathon {
   routeId      String?
   route        Route?  @relation(fields: [routeId], references: [id], onDelete: SetNull)
   /// Cronograma: `[{ time, title, description }]`.
-  schedule     Json  @default("[]")
+  schedule     Json    @default("[]")
   /// Que incluye la inscripcion: `["remera", "medalla", "hidratacion"]`.
-  includes     Json  @default("[]")
+  includes     Json    @default("[]")
   /// Retiro de kit: `{ from, to, address, lat, lng }`.
   kitPickup    Json?
   coverUrl     String?
@@ -463,6 +467,17 @@ model Marathon {
   /// solo como respaldo para el QR que ya estaba subido como imagen.
   paymentQrPayload      String?
 
+  /// Cuando el admin puso la maraton "en preparacion". Null = todavia no.
+  ///
+  /// Es la antesala de la largada: desde ese momento el movil de cada inscrito
+  /// no deja hacer nada mas que mirar el aviso. No se deriva de `startsAt`
+  /// porque el corte lo decide una persona con el arco montado delante, no el
+  /// reloj.
+  preparingAt      DateTime?
+  /// El aviso que ve el inscrito mientras la maraton esta en preparacion.
+  /// Null = el texto por defecto de la app, traducido al idioma del corredor.
+  preparingMessage String?
+
   /// Cuando el admin dio la largada desde el panel. Null = todavia no arranco.
   /// Es lo que pone en marcha el movil de cada corredor: no se deriva de
   /// `startsAt` porque una largada se retrasa y `startsAt` es lo programado.
@@ -478,13 +493,14 @@ model Marathon {
   serviceFeeConfigId String?
   serviceFeeConfig   ServiceFeeConfig? @relation(fields: [serviceFeeConfigId], references: [id], onDelete: SetNull)
 
-  categories    MarathonCategory[]
-  extras        MarathonExtra[]
-  registrations Registration[]
-  trainingPlans TrainingPlan[]
+  categories       MarathonCategory[]
+  extras           MarathonExtra[]
+  registrations    Registration[]
+  trainingPlans    TrainingPlan[]
   trackingSessions TrackingSession[]
 
   @@index([startsAt])
+  @@index([preparingAt])
   @@index([registrationStatus, startsAt])
   @@index([city])
   @@index([routeId])
@@ -539,7 +555,7 @@ model ServiceFeeConfig {
   scope   ServiceFeeScope
   enabled Boolean         @default(false)
 
-  type ServiceFeeType @default(percent)
+  type       ServiceFeeType @default(percent)
   /// Puntos basicos: 1000 = 10%. Entero, para no arrastrar errores de coma flotante.
   percentBps Int?
   fixedCents Int?
@@ -582,17 +598,17 @@ model Registration {
   /// Extras elegidos: `[{ extraId, name, quantity, priceCents }]`.
   extras       Json @default("[]")
 
-  subtotalCents   Int    @default(0)
-  serviceFeeCents Int    @default(0)
+  subtotalCents      Int    @default(0)
+  serviceFeeCents    Int    @default(0)
   /// Desglose exacto que se cobro: `[{ type, refId, label, quantity,
   /// unitPriceCents, amountCents }]`. Se congela al confirmar. Sin el, un
   /// comprobante emitido hoy mostraria los precios de manana.
-  quoteSnapshot   Json?
+  quoteSnapshot      Json?
   /// Copia exacta de la config aplicada. Cambiar el fee despues NO altera
   /// comprobantes historicos.
   serviceFeeSnapshot Json?
-  totalCents      Int    @default(0)
-  currency        String @default("BOB")
+  totalCents         Int    @default(0)
+  currency           String @default("BOB")
 
   /// TEMPORAL — token opaco que devuelve `POST /public/registrations` una sola
   /// vez. Es lo que autoriza a la web publica a subir el comprobante y a
@@ -644,8 +660,22 @@ model Payment {
   expiresAt     DateTime?
   paidAt        DateTime?
   refundedAt    DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+
+  /// Quien dio el cobro por bueno a mano —transferencia o QR—, para auditoria.
+  /// Vive como relacion y no dentro de `methodDetails`: un id suelto en un JSON
+  /// no se puede unir con la tabla de usuarios, y lo que se audita es el
+  /// **nombre** de quien aprobo, no un cuid que no le dice nada a nadie.
+  confirmedById String?
+  confirmedBy   User?   @relation("PaymentConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+
+  /// Quien ordeno la devolucion. Columna propia y no reutilizar `confirmedById`:
+  /// aprobar y devolver son dos decisiones distintas, a veces de dos personas
+  /// distintas, y una auditoria que pisa la primera con la segunda no sirve
+  /// para lo unico que se le pide — saber quien hizo que.
+  refundedById String?
+  refundedBy   User?    @relation("PaymentRefundedBy", fields: [refundedById], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   proofs PaymentProof[]
 
@@ -676,7 +706,7 @@ model PaymentProof {
   note      String?
 
   reviewedById String?
-  reviewedBy   User?   @relation("ProofReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedBy   User?     @relation("ProofReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt   DateTime?
 
   createdAt DateTime @default(now())
@@ -698,10 +728,10 @@ model TrainingPlanTemplate {
   description String?
 
   /// 5000, 10000, 21097 o 42195.
-  goalDistanceMeters Int
-  level              PlanLevel
-  totalWeeks         Int
-  weeklySessions     Int
+  goalDistanceMeters      Int
+  level                   PlanLevel
+  totalWeeks              Int
+  weeklySessions          Int
   avgWeeklyDistanceMeters Int
 
   coverUrl String?
@@ -727,7 +757,7 @@ model TrainingPlanTemplateSession {
   weekday Int
   type    TrainingSessionType
 
-  targetDistanceMeters Int?
+  targetDistanceMeters  Int?
   targetDurationSeconds Int?
 
   /// Multiplicador sobre el ritmo base del usuario: 1.15 = 15% mas lento que
@@ -790,7 +820,7 @@ model TrainingPlanSession {
 
   week          Int
   weekday       Int
-  scheduledDate DateTime @db.Date
+  scheduledDate DateTime            @db.Date
   type          TrainingSessionType
 
   targetDistanceMeters  Int?
@@ -802,8 +832,8 @@ model TrainingPlanSession {
   /// Ruta sugerida como GeoJSON.
   suggestedRoute Json?
 
-  status               TrainingPlanSessionStatus @default(pending)
-  rescheduledFromDate  DateTime?                 @db.Date
+  status              TrainingPlanSessionStatus @default(pending)
+  rescheduledFromDate DateTime?                 @db.Date
 
   /// El entrenamiento que completo esta sesion.
   workoutId String?  @unique
@@ -842,16 +872,16 @@ model Workout {
   endedAt   DateTime?
 
   // ─── Metricas consolidadas POR EL SERVIDOR desde las posiciones ───
-  durationSeconds      Int  @default(0)
+  durationSeconds     Int    @default(0)
   /// Excluye las pausas. La auto-pausa la detecta el cliente.
-  movingSeconds        Int  @default(0)
-  distanceMeters       Int  @default(0)
-  avgPaceSecPerKm      Int?
-  avgSpeedMps          Float?
-  elevationGainMeters  Int  @default(0)
-  calories             Int?
+  movingSeconds       Int    @default(0)
+  distanceMeters      Int    @default(0)
+  avgPaceSecPerKm     Int?
+  avgSpeedMps         Float?
+  elevationGainMeters Int    @default(0)
+  calories            Int?
   /// Indice (base 0) del kilometro mas rapido, para el "mejor km".
-  bestKmIndex          Int?
+  bestKmIndex         Int?
 
   /// Lo que dijo el cliente. Se guarda para comparar y detectar deriva, pero
   /// la fuente de verdad son las metricas de arriba.
@@ -904,10 +934,10 @@ model WorkoutLap {
   workoutId String
   workout   Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
 
-  index                Int
-  targetPaceSecPerKm   Int?
-  actualPaceSecPerKm   Int?
-  durationSeconds      Int
+  index              Int
+  targetPaceSecPerKm Int?
+  actualPaceSecPerKm Int?
+  durationSeconds    Int
 
   @@unique([workoutId, index])
   @@map("workout_laps")
@@ -932,17 +962,22 @@ model TrackingSession {
   marathon   Marathon? @relation(fields: [marathonId], references: [id], onDelete: SetNull)
 
   deviceId String?
-  device   Device?  @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
 
   status TrackingSessionStatus @default(active)
 
   /// Solo el hash del token de ingesta.
-  ingestToken    String    @unique
-  startedAt      DateTime  @default(now())
-  lastPositionAt DateTime?
-  finishedAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  ingestToken      String    @unique
+  startedAt        DateTime  @default(now())
+  lastPositionAt   DateTime?
+  finishedAt       DateTime?
+  /// Cuando el servidor decidio, mirando el GPS contra el trazado oficial, que
+  /// este corredor cruzo la meta. Es una marca de auditoria: el cierre de la
+  /// sesion va detras y puede fallar, y sin esto no habria forma de saber que
+  /// la llegada se detecto.
+  finishDetectedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@index([userId, status])
   @@index([marathonId, status])
@@ -1019,7 +1054,7 @@ model RaceResult {
   avgPaceSecPerKm     Int?
   avgSpeedMps         Float?
   distanceMeters      Int
-  elevationGainMeters Int  @default(0)
+  elevationGainMeters Int    @default(0)
   bestKmIndex         Int?
 
   overallRank  Int?

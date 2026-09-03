@@ -26,14 +26,7 @@ import { PanelController } from './panel.controller';
  * ni una accion.
  */
 @Module({
-  imports: [
-    PricingModule,
-    PaymentsModule,
-    RacesModule,
-    RoutesModule,
-    UsersModule,
-    RealtimeModule,
-  ],
+  imports: [PricingModule, PaymentsModule, RacesModule, RoutesModule, UsersModule, RealtimeModule],
   controllers: [AdminController, PanelController],
   providers: [AdminService],
 })

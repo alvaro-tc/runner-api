@@ -138,6 +138,18 @@ export class ImportResultsDto {
 
 // ─── Pago por transferencia ────────────────────────────────────────────────
 
+/**
+ * El motivo de una devolucion. **Obligatorio**: devolver anula la inscripcion
+ * de alguien, y un asiento sin motivo no se puede auditar seis meses despues.
+ */
+export class RefundPaymentDto {
+  @ApiProperty({ example: 'La carrera se suspendio por lluvia' })
+  @IsString()
+  @IsNotEmpty({ message: 'Hace falta decir por que se devuelve' })
+  @MaxLength(300)
+  reason!: string;
+}
+
 export class ConfirmTransferDto {
   @ApiPropertyOptional({
     example: 'BNB-88213',
@@ -527,6 +539,50 @@ export class UpdateExtraDto extends ExtraFieldsDto {}
 
 // ─── Alta y edición de usuarios ────────────────────────────────────────────
 
+/** Cuantos usuarios trae una pagina si no se pide otra cosa, y el techo. */
+export const PAGINA_USUARIOS = 20;
+export const PAGINA_USUARIOS_MAXIMA = 100;
+
+/**
+ * Filtros del listado de usuarios.
+ *
+ * Pagina por `page`/`pageSize` y no por cursor como el resto de la API: el
+ * panel necesita saltar a una pagina y saber cuantos hay en total —"1-20 de
+ * 340"—, y un cursor opaco no da ninguna de las dos cosas. La tabla de usuarios
+ * es chica y solo la miran administradores, asi que el `OFFSET` no molesta.
+ */
+export class ListUsersQueryDto {
+  @ApiPropertyOptional({
+    example: '76543210',
+    description: 'Coincidencia parcial en email, CI, nombre o celular de inscripcion',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  q?: string;
+
+  @ApiPropertyOptional({ enum: UserRole, description: 'Sin esto, vienen los tres roles' })
+  @IsOptional()
+  @IsEnum(UserRole)
+  role?: UserRole;
+
+  @ApiPropertyOptional({ default: 1, minimum: 1 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ default: PAGINA_USUARIOS, maximum: PAGINA_USUARIOS_MAXIMA })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(PAGINA_USUARIOS_MAXIMA)
+  pageSize?: number;
+}
+
 export class CreateUserDto {
   @ApiProperty({ example: 'organizador@paceup.bo' })
   @IsEmail({}, { message: 'El email no tiene un formato válido' })
@@ -607,4 +663,23 @@ export class SetPasswordDto {
   @MaxLength(128)
   @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
   password!: string;
+}
+
+/**
+ * El aviso que ven los inscritos mientras la maraton esta en preparacion.
+ *
+ * Opcional: sin el, la app pinta su texto por defecto traducido al idioma de
+ * cada corredor, que es mejor que un aviso escrito en un idioma que esa persona
+ * no lee. `null` explicito borra el que hubiera y vuelve al texto por defecto.
+ */
+export class PrepareMarathonDto {
+  @ApiPropertyOptional({
+    example: 'Concentracion en el arco a las 06:45. No cierres la app.',
+    nullable: true,
+    maxLength: 500,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  declare message?: string | null;
 }

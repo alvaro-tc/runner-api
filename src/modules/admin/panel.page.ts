@@ -1015,7 +1015,9 @@ function rolesAsignables() {
  * nombre mal escrito es mas clics que el trabajo en si.
  */
 async function vistaUsuarios(busqueda) {
-  const usuarios = await api('/admin/users' + (busqueda ? '?q=' + encodeURIComponent(busqueda) : ''));
+  // pageSize al maximo: este panel no tiene paginador —el de la app sí—, y sin
+  // pedirlo la API devolveria 20 filas, que es menos de lo que mostraba antes.
+  const usuarios = await api('/admin/users?pageSize=100' + (busqueda ? '&q=' + encodeURIComponent(busqueda) : ''));
 
   const fila = (u) =>
     '<tr>' +
@@ -1054,7 +1056,7 @@ async function vistaUsuarios(busqueda) {
       '<span class="muted">Mínimo 8 caracteres, con al menos una letra y un número. El email queda verificado.</span>' +
     '</form>' +
     '<div class="row">' +
-      '<label>Buscar<input id="q" placeholder="email o nombre" value="' + esc(busqueda || '') + '"></label>' +
+      '<label>Buscar<input id="q" placeholder="email, CI, nombre o celular" value="' + esc(busqueda || '') + '"></label>' +
       '<button class="act" data-accion="buscar" data-id="-">Buscar</button>' +
     '</div>' +
     (usuarios.length

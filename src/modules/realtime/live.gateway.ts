@@ -10,7 +10,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../database/prisma.service';
 import { TokenService } from '../auth/token.service';
-import type { EstadoDeMaraton, PosicionEnVivo } from './live-state';
+import type { EstadoDeMaraton, LlegadaEnVivo, PosicionEnVivo } from './live-state';
 
 /** Namespace del seguimiento en vivo. Separado del resto por si algun dia lo hay. */
 export const NAMESPACE_LIVE = '/live';
@@ -145,6 +145,24 @@ export class LiveGateway implements OnGatewayConnection {
     }
 
     this.server.to(salaDeMaraton(marathonId)).emit('marathon:state', estado);
+  }
+
+  /**
+   * Avisa de que un corredor cruzo la meta.
+   *
+   * Va por la misma sala que las posiciones y con la misma regla: solo el
+   * dorsal. Lo escuchan el panel —para tachar al que ya llego— y el movil del
+   * propio corredor, que se reconoce por su dorsal y cierra su carrera. Un
+   * canal privado por corredor obligaria a que el servidor supiera que socket
+   * es de quien, que es justo lo que este namespace evita.
+   */
+  emitirLlegada(marathonId: string, llegada: LlegadaEnVivo): void {
+    if (!this.server) {
+      this.logger.debug('Gateway sin servidor: no se publica la llegada');
+      return;
+    }
+
+    this.server.to(salaDeMaraton(marathonId)).emit('runner:finish', llegada);
   }
 }
 

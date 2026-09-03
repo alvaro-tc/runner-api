@@ -718,14 +718,14 @@ GET    /admin/service-fee/preview?subtotalCents=&marathonId=
 PUT    /admin/marathons/:id/service-fee            ← override por maratón
 DELETE /admin/marathons/:id/service-fee            ← volver a la global
 
-GET    /admin/marathons                            ← incluye las no publicadas
+GET    /admin/marathons                            ← admin | organizer · incluye las no publicadas
 POST   /admin/marathons                            ← crear (nace como borrador)
-GET    /admin/marathons/:id                        ← detalle con categorías y extras
+GET    /admin/marathons/:id                        ← admin | organizer · detalle con categorías y extras
 PUT    /admin/marathons/:id                        ← editar (parcial)
 DELETE /admin/marathons/:id                        ← solo si no tiene inscritos
 POST   /admin/marathons/:id/publish | /unpublish
 POST   /admin/marathons/:id/close-registrations | /reopen-registrations
-GET    /admin/marathons/:id/registrants.csv
+GET    /admin/marathons/:id/registrants.csv        ← admin | organizer
 
 POST   /admin/marathons/:id/categories             ← categorías
 PUT    /admin/categories/:categoryId
@@ -735,13 +735,15 @@ PUT    /admin/extras/:extraId
 DELETE /admin/extras/:extraId
 
 GET    /admin/registrations?marathonId=&status=
+GET    /admin/payments?marathonId=&status=&page=&pageSize=  ← admin | organizer · los tickets, con `validatedBy`
 GET    /admin/payments/pending-transfers
 POST   /admin/payments/:id/confirm-transfer
+POST   /admin/payments/:id/refund                   ← admin | organizer · devuelve y anula la inscripción
 
 POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal
 POST   /admin/marathons/:id/recalculate-ranks
 
-GET    /admin/users?q=                             ← admin | organizer
+GET    /admin/users?q=&role=&page=&pageSize=       ← admin | organizer · `meta.total`; `q` busca email, CI, nombre y celular
 POST   /admin/users                                ← admin | organizer · única forma de crear un admin
 PUT    /admin/users/:id                            ← admin | organizer
 POST   /admin/users/:id/password                   ← admin | organizer · cierra todas sus sesiones
@@ -754,7 +756,28 @@ POST   /admin/payment-proofs/:id/reject            ← admin | organizer
 
 Las marcadas `admin | organizer` son **todo** lo que alcanza un organizador; el
 resto de la lista le devuelve `403`. Sobre las de usuarios pesa además el techo
-de la sección anterior: solo cuentas `runner`.
+de la sección anterior: solo cuentas `runner`, también al **listar**.
+
+Las lecturas de maratón (lista, detalle, mapa en vivo y CSV) están abiertas al
+organizador porque sin ellas no puede saber a qué carrera pertenece el cobro que
+está validando. Las escrituras que mueven la carrera —crear, editar, publicar,
+preparar, largar, cortar— siguen siendo solo de `admin`.
+
+`POST /admin/payments/:id/refund` **anula la inscripción**, no solo mueve
+dinero: quien recupera su plata no corre, así que el cupo vuelve al pozo y el
+stock de los adicionales también, por el mismo camino que un reembolso del
+proveedor (`liberarPorReembolso`). Solo sobre un cobro `paid`, idempotente, y
+con `reason` obligatorio. Fuera de tarjeta no hay proveedor a quien pedírselo:
+el dinero lo devuelve una persona por el mismo canal por el que entró, y lo que
+queda aquí es el asiento de **quién lo ordenó y por qué** — que sale luego en
+`refundedBy` / `refundReason`, sin pisar el `validatedBy` de quien lo había
+aprobado.
+
+`GET /admin/payments` es la cola de trabajo del organizador: una sola lista para
+los dos métodos que se validan a mano. Cada fila trae `validatedBy` —**el nombre
+de quien dio el cobro por pagado**, que es el dato de auditoría— y el `proofId`
+que hay que aprobar o rechazar; sin `proofId`, lo que aplica es
+`POST /admin/payments/:id/confirm-transfer`.
 
 ### El cargo por servicio y su vista previa
 

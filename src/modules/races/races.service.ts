@@ -9,6 +9,7 @@ import { Prisma } from '../../../generated/prisma/client';
 import { PaymentStatus, RegistrationStatus } from '../../../generated/prisma/enums';
 import { aLineString, simplificarHasta } from './route';
 import { ShareCardService } from './share-card.service';
+import { estadoEnVivo } from '../marathons/live-status';
 import { RaceStatusFilter, type ListMyRacesQueryDto } from './dto/race.dto';
 
 /**
@@ -31,6 +32,8 @@ const MARATON_DE_LA_CARRERA = {
   distanceMeters: true,
   coverUrl: true,
   kitPickup: true,
+  preparingAt: true,
+  preparingMessage: true,
   liveStartedAt: true,
   liveFinishedAt: true,
 } as const;
@@ -516,6 +519,13 @@ export class RacesService {
         // en la pantalla de carrera aunque se haya perdido el aviso del socket.
         liveStartedAt: carrera.marathon.liveStartedAt?.toISOString() ?? null,
         liveFinishedAt: carrera.marathon.liveFinishedAt?.toISOString() ?? null,
+        // La preparacion viaja **aqui y no en el catalogo**: es lo que bloquea
+        // la app, y solo puede bloquearsela a quien tiene inscripcion
+        // confirmada en esta carrera. Este endpoint devuelve exactamente eso,
+        // asi que nadie mas puede llegar a ver el aviso.
+        preparingAt: carrera.marathon.preparingAt?.toISOString() ?? null,
+        preparingMessage: carrera.marathon.preparingMessage,
+        liveState: estadoEnVivo(carrera.marathon),
       },
       bibNumber: carrera.bibNumber,
       categoryName: carrera.category?.name ?? null,

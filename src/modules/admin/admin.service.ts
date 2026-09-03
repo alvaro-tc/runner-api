@@ -13,6 +13,8 @@ import { UsersService } from '../users/users.service';
 import { calcularServiceFee } from '../pricing/service-fee';
 import { ServiceFeeConfigService } from '../pricing/service-fee.service';
 import { resolverEstado } from '../marathons/registration-status';
+import { estadoEnVivo } from '../marathons/live-status';
+import type { EstadoDeMaraton } from '../realtime/live-state';
 import { PaymentsService } from '../payments/payments.service';
 import { RacesService } from '../races/races.service';
 import { RoutesService } from '../routes/routes.service';
@@ -27,6 +29,8 @@ import {
 import { Prisma } from '../../../generated/prisma/client';
 import type { CreateRouteDto, ListRoutesQueryDto, UpdateRouteDto } from '../routes/dto/route.dto';
 import { aCsv } from './csv';
+import { Paginated } from '../../common/dto/response-envelope';
+import { PAGINA_USUARIOS } from './dto/admin.dto';
 import type {
   CategoryFieldsDto,
   CreateCategoryDto,
@@ -35,6 +39,7 @@ import type {
   CreateUserDto,
   ExtraFieldsDto,
   ImportResultsDto,
+  ListUsersQueryDto,
   MarathonFieldsDto,
   ServiceFeeConfigDto,
   UpdateCategoryDto,
@@ -45,6 +50,41 @@ import type {
 
 /** Subtotal de ejemplo de la vista previa cuando el admin no da uno. */
 const SUBTOTAL_DE_EJEMPLO = 20_000;
+
+/** Lo que hace falta de una maraton para anunciar su estado en vivo. */
+const SELECT_EN_VIVO = {
+  id: true,
+  slug: true,
+  name: true,
+  preparingAt: true,
+  preparingMessage: true,
+  liveStartedAt: true,
+  liveFinishedAt: true,
+} as const;
+
+/**
+ * El estado que viaja por el socket, armado en un solo sitio.
+ *
+ * Lo mandan tres caminos —preparar, largar y la foto del mapa— y los tres
+ * tienen que decir exactamente lo mismo: un cliente que reciba "en preparacion"
+ * por un lado y "no iniciada" por otro parpadearia entre dos pantallas.
+ */
+function estadoParaElSocket(m: {
+  id: string;
+  preparingAt: Date | null;
+  preparingMessage: string | null;
+  liveStartedAt: Date | null;
+  liveFinishedAt: Date | null;
+}): EstadoDeMaraton {
+  return {
+    marathonId: m.id,
+    state: estadoEnVivo(m),
+    preparingAt: m.preparingAt?.toISOString() ?? null,
+    preparingMessage: m.preparingMessage,
+    startedAt: m.liveStartedAt?.toISOString() ?? null,
+    finishedAt: m.liveFinishedAt?.toISOString() ?? null,
+  };
+}
 
 /**
  * Las columnas de usuario que el panel puede ver.
@@ -293,19 +333,60 @@ export class AdminService {
       data: arrancar
         ? { liveStartedAt: maraton.liveStartedAt ?? ahora }
         : { liveFinishedAt: maraton.liveFinishedAt ?? ahora },
-      select: { id: true, slug: true, name: true, liveStartedAt: true, liveFinishedAt: true },
+      select: SELECT_EN_VIVO,
     });
 
-    const estado = {
-      marathonId: actualizada.id,
-      startedAt: actualizada.liveStartedAt?.toISOString() ?? null,
-      finishedAt: actualizada.liveFinishedAt?.toISOString() ?? null,
-    };
+    const estado = estadoParaElSocket(actualizada);
 
     // Despues de guardar: si el socket se cayo, la carrera arranco igual y el
     // movil se entera al preguntar por REST.
     this.live.anunciar(estado);
     this.logger.log(`Maraton ${actualizada.slug} ${arrancar ? 'largada' : 'finalizada'}`);
+
+    return { ...estado, slug: actualizada.slug, name: actualizada.name };
+  }
+
+  /**
+   * Pone la maraton "en preparacion", o la saca de ahi.
+   *
+   * Es la antesala de la largada y **bloquea la app de cada inscrito**: desde
+   * que se pulsa, quien tiene inscripcion confirmada en esta carrera no ve otra
+   * cosa que el aviso. Por eso existe la marcha atras —`activar: false`— y por
+   * eso el estado no se deriva de `startsAt`: el organizador cierra el kiosko
+   * cuando tiene el arco montado, no cuando lo dice el programa.
+   *
+   * El mensaje es opcional en los dos sentidos. Sin el, la app pinta su texto
+   * por defecto en el idioma del corredor, que es mejor que un aviso en un
+   * idioma que esa persona no lee. Llamarla otra vez con solo el mensaje sirve
+   * para **corregir el texto** sin tocar el estado.
+   */
+  async preparar(marathonId: string, opciones: { activar: boolean; message?: string | null }) {
+    const maraton = await this.buscarMaraton(marathonId);
+
+    if (opciones.activar && maraton.liveStartedAt) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Esa maraton ya arranco',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const actualizada = await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: {
+        preparingAt: opciones.activar ? (maraton.preparingAt ?? new Date()) : null,
+        // `undefined` deja el texto como estaba: quien cancela la preparacion no
+        // pierde el aviso que ya habia escrito para la proxima vez.
+        preparingMessage: opciones.message === undefined ? undefined : opciones.message,
+      },
+      select: SELECT_EN_VIVO,
+    });
+
+    const estado = estadoParaElSocket(actualizada);
+    this.live.anunciar(estado);
+    this.logger.log(
+      `Maraton ${actualizada.slug} ${opciones.activar ? 'en preparacion' : 'fuera de preparacion'}`,
+    );
 
     return { ...estado, slug: actualizada.slug, name: actualizada.name };
   }
@@ -322,9 +403,7 @@ export class AdminService {
     const maraton = await this.buscarMaraton(marathonId);
 
     return {
-      marathonId: maraton.id,
-      startedAt: maraton.liveStartedAt?.toISOString() ?? null,
-      finishedAt: maraton.liveFinishedAt?.toISOString() ?? null,
+      ...estadoParaElSocket(maraton),
       runners: this.live.posiciones(marathonId),
     };
   }
@@ -430,6 +509,14 @@ export class AdminService {
    */
   async confirmarTransferencia(paymentId: string, adminUserId: string, referencia?: string) {
     return this.payments.acreditarManualmente(paymentId, adminUserId, referencia);
+  }
+
+  /**
+   * Devuelve un cobro y suelta la plaza. No reimplementa nada: es el mismo
+   * camino del reembolso del proveedor, con el nombre de quien lo ordeno.
+   */
+  async reembolsar(paymentId: string, adminUserId: string, motivo: string) {
+    return this.payments.reembolsarManualmente(paymentId, adminUserId, motivo);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -554,6 +641,9 @@ export class AdminService {
       // carrera: hay tres, y saber cual esta corriendo es lo primero que se mira.
       liveStartedAt: m.liveStartedAt?.toISOString() ?? null,
       liveFinishedAt: m.liveFinishedAt?.toISOString() ?? null,
+      preparingAt: m.preparingAt?.toISOString() ?? null,
+      preparingMessage: m.preparingMessage,
+      liveState: estadoEnVivo(m),
     }));
   }
 
@@ -587,6 +677,121 @@ export class AdminService {
         : null,
       createdAt: r.createdAt.toISOString(),
     }));
+  }
+
+  /**
+   * Los tickets: todos los cobros de las maratones, con su comprobante y con
+   * **quien los dio por buenos**.
+   *
+   * Una sola lista y no una por metodo. El organizador no trabaja pensando "voy
+   * a revisar transferencias y luego QRs": trabaja sobre la cola de gente que
+   * dice haber pagado, y el metodo es una columna mas. Dos bandejas obligarian
+   * a mirar en las dos para saber si a alguien le falta el visto.
+   *
+   * `validatedBy` es el dato de auditoria y sale de dos sitios porque un cobro
+   * se puede cerrar por dos caminos: aprobar el comprobante (queda en el
+   * comprobante) o confirmar la transferencia (queda en el pago). Se prefiere
+   * el del pago, que es el que existe siempre que hay dinero acreditado.
+   */
+  async listarPagos(filtros: {
+    marathonId?: string;
+    status?: PaymentStatus;
+    page?: number;
+    pageSize?: number;
+  }) {
+    const pageSize = filtros.pageSize ?? 20;
+    const page = filtros.page ?? 1;
+
+    const where: Prisma.PaymentWhereInput = {
+      ...(filtros.status ? { status: filtros.status } : {}),
+      ...(filtros.marathonId ? { registration: { marathonId: filtros.marathonId } } : {}),
+      registration: {
+        deletedAt: null,
+        ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
+      },
+    };
+
+    const [total, pagos] = await this.prisma.$transaction([
+      this.prisma.payment.count({ where }),
+      this.prisma.payment.findMany({
+        where,
+        // Los pendientes primero y, dentro, el mas viejo arriba: es una cola de
+        // trabajo. Ordenar solo por fecha dejaria lo que hay que hacer mezclado
+        // con lo que ya se hizo.
+        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: {
+          confirmedBy: { select: { id: true, name: true } },
+          refundedBy: { select: { id: true, name: true } },
+          // El ultimo comprobante: si el corredor subio uno, lo rechazaron y
+          // subio otro, el que se revisa es el nuevo.
+          proofs: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: { reviewedBy: { select: { id: true, name: true } } },
+          },
+          registration: {
+            select: {
+              id: true,
+              bibNumber: true,
+              status: true,
+              personalData: true,
+              marathon: { select: { id: true, name: true } },
+              user: { select: { id: true, name: true, email: true, ci: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const filas = pagos.map((p) => {
+      const comprobante = p.proofs[0];
+      const revisor = p.confirmedBy ?? comprobante?.reviewedBy ?? null;
+
+      return {
+        id: p.id,
+        method: p.method,
+        status: p.status,
+        amountCents: p.amountCents,
+        currency: p.currency,
+        createdAt: p.createdAt.toISOString(),
+        paidAt: p.paidAt?.toISOString() ?? null,
+        refundedAt: p.refundedAt?.toISOString() ?? null,
+        // El motivo de la devolucion vive donde ya lo escriben el webhook y la
+        // cancelacion; un segundo campo para lo mismo seria un segundo sitio
+        // donde mirar.
+        refundReason: p.status === PaymentStatus.refunded ? p.failureReason : null,
+        refundedBy: p.refundedBy?.name ?? null,
+
+        registrationId: p.registrationId,
+        registrationStatus: p.registration.status,
+        bibNumber: p.registration.bibNumber,
+        marathonId: p.registration.marathon.id,
+        marathon: p.registration.marathon.name,
+        runner: dato(p.registration.personalData, 'fullName') || p.registration.user.name,
+        runnerEmail: p.registration.user.email ?? null,
+        runnerCi: p.registration.user.ci ?? null,
+        runnerPhone: dato(p.registration.personalData, 'phone') || null,
+
+        // El comprobante, si lo hay. `proofId` es lo que la app necesita para
+        // aprobar o rechazar; sin el, el boton que aplica es el de confirmar
+        // la transferencia.
+        proofId: comprobante?.status === 'in_review' ? comprobante.id : null,
+        proofStatus: comprobante?.status ?? null,
+        proofImageUrl: comprobante ? this.storage.url(comprobante.imageKey) : null,
+        proofReference: comprobante?.reference ?? null,
+        proofNote: comprobante?.note ?? null,
+
+        /// Quien lo valido. **El dato de auditoria**: un pago acreditado sin
+        /// nombre detras no se puede revisar.
+        validatedById: revisor?.id ?? null,
+        validatedBy: revisor?.name ?? null,
+        validatedAt: (p.paidAt ?? comprobante?.reviewedAt)?.toISOString() ?? null,
+      };
+    });
+
+    return new Paginated(filas, null, total, page, pageSize);
   }
 
   /** Pagos pendientes de confirmar a mano: la bandeja de trabajo del admin. */
@@ -624,23 +829,59 @@ export class AdminService {
    * gestionar carreras, no para mirar a la gente: lo que no hace falta aqui no
    * se consulta, y asi no puede filtrarse por un descuido de serializacion.
    */
-  async listarUsuarios(busqueda?: string) {
-    const usuarios = await this.prisma.user.findMany({
-      where: busqueda
+  async listarUsuarios(query: ListUsersQueryDto, actorRole?: UserRole) {
+    const pageSize = query.pageSize ?? PAGINA_USUARIOS;
+    const page = query.page ?? 1;
+    const busqueda = query.q;
+
+    // Un organizador solo ve corredores, digan lo que digan sus filtros. Es el
+    // mismo techo que ya le impide editar a un admin (`techoDeOrganizador`),
+    // aplicado tambien a **mirar**: dejarle listar la plantilla de admins le
+    // daria los correos con los que atacar las cuentas que no puede tocar.
+    const rol = actorRole === UserRole.organizer ? UserRole.runner : query.role;
+
+    // El rol va en la consulta y no en el cliente: la pagina corta por fecha, y
+    // filtrando despues los admins y organizadores —pocos, y de los primeros
+    // creados— se quedaban fuera del corte.
+    const where: Prisma.UserWhereInput = {
+      ...(rol ? { role: rol } : {}),
+      ...(busqueda
         ? {
             OR: [
               { email: { contains: busqueda, mode: 'insensitive' } },
               { ci: { contains: busqueda, mode: 'insensitive' } },
               { name: { contains: busqueda, mode: 'insensitive' } },
+              // El celular no es una columna del usuario: lo unico que se pide
+              // es en el formulario de inscripcion, y ahi vive. Buscar por el
+              // es lo que hace el organizador cuando alguien le escribe por
+              // WhatsApp y no sabe con que correo se registro.
+              {
+                registrations: {
+                  some: {
+                    personalData: {
+                      path: ['phone'],
+                      string_contains: busqueda,
+                    },
+                  },
+                },
+              },
             ],
           }
-        : {},
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-      select: SELECCION_USUARIO,
-    });
+        : {}),
+    };
 
-    return usuarios.map(aUsuarioPublico);
+    const [total, usuarios] = await this.prisma.$transaction([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        select: SELECCION_USUARIO,
+      }),
+    ]);
+
+    return new Paginated(usuarios.map(aUsuarioPublico), null, total, page, pageSize);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -919,6 +1160,9 @@ export class AdminService {
       publishedAt: maraton.publishedAt?.toISOString() ?? null,
       liveStartedAt: maraton.liveStartedAt?.toISOString() ?? null,
       liveFinishedAt: maraton.liveFinishedAt?.toISOString() ?? null,
+      preparingAt: maraton.preparingAt?.toISOString() ?? null,
+      preparingMessage: maraton.preparingMessage,
+      liveState: estadoEnVivo(maraton),
       registrations: maraton._count.registrations,
       feeOverride: maraton.serviceFeeConfig,
       categories: maraton.categories,

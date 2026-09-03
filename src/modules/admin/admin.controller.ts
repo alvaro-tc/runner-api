@@ -31,7 +31,7 @@ import { ErrorCode } from '../../common/errors/error-codes';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { RegistrationStatus, type UserRole } from '../../../generated/prisma/enums';
+import { PaymentStatus, RegistrationStatus, UserRole } from '../../../generated/prisma/enums';
 import {
   CreateRouteDto,
   ListRoutesQueryDto,
@@ -50,6 +50,9 @@ import {
   FeePreviewQueryDto,
   ImportResultsDto,
   ImportResultsResponseDto,
+  ListUsersQueryDto,
+  PrepareMarathonDto,
+  RefundPaymentDto,
   ServiceFeeConfigDto,
   SetPasswordDto,
   UpdateCategoryDto,
@@ -84,8 +87,13 @@ const LIMITE_ADMIN = { corto: { limit: 60, ttl: 60_000 } };
  * pagos** —quien valida las transferencias del dia a dia es el organizador—,
  * que llevan su propio `@Roles` para dejar entrar tambien a `organizer`. El
  * decorador de metodo sobrescribe al de la clase, asi que ampliar el acceso es
- * explicito y visible endpoint por endpoint; lo demas —maratones, recorridos,
- * precios, resultados— se queda en `admin` por no llevar nada.
+ * explicito y visible endpoint por endpoint; lo demas —crear y editar
+ * maratones, recorridos, precios, resultados— se queda en `admin`.
+ *
+ * Al organizador se le abren tambien las **lecturas** de maraton (la lista, el
+ * detalle, el mapa en vivo y el CSV de inscritos): sin ellas no puede saber a
+ * que carrera pertenece el pago que esta validando. Las escrituras que mueven
+ * la carrera —largar, cortar, preparar, publicar— siguen siendo de `admin`.
  */
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
@@ -222,6 +230,7 @@ export class AdminController {
   // ─── Maratones ───────────────────────────────────────────────────────────
 
   @Get('marathons')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Maratones, publicadas y borradores',
     description:
@@ -249,6 +258,7 @@ export class AdminController {
   }
 
   @Get('marathons/:id')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Detalle completo, con categorías y extras',
     description: 'Es lo que rellena el formulario de edición. Trae borradores, como todo aquí.',
@@ -409,6 +419,33 @@ export class AdminController {
 
   // ─── Largada en vivo ─────────────────────────────────────────────────────
 
+  @Post('marathons/:id/prepare')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Poner la maratón "en preparación"',
+    description:
+      'La antesala de la largada. **Bloquea la app de cada inscrito**: quien tenga inscripción ' +
+      'confirmada en esta carrera deja de poder hacer nada más que leer el aviso, hasta que se ' +
+      'dé la largada o se cancele la preparación. El `message` es opcional; sin él la app pinta ' +
+      'su texto por defecto en el idioma del corredor. Llamarlo otra vez solo con el mensaje ' +
+      'corrige el aviso sin tocar el estado.',
+  })
+  preparar(@Param('id') id: string, @Body() dto: PrepareMarathonDto) {
+    return this.admin.preparar(id, { activar: true, message: dto.message });
+  }
+
+  @Post('marathons/:id/cancel-preparation')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Sacarla de preparación',
+    description:
+      'La marcha atrás: los inscritos recuperan la app. El texto del aviso se conserva para la ' +
+      'próxima vez.',
+  })
+  cancelarPreparacion(@Param('id') id: string) {
+    return this.admin.preparar(id, { activar: false });
+  }
+
   @Post('marathons/:id/start')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -435,6 +472,7 @@ export class AdminController {
   }
 
   @Get('marathons/:id/live')
+  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Foto de dónde va cada corredor ahora mismo',
     description:
@@ -475,6 +513,7 @@ export class AdminController {
    * organizador le de a un enlace y le salga el archivo.
    */
   @Get('marathons/:id/registrants.csv')
+  @Roles('admin', 'organizer')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @ApiOperation({
     summary: 'Exportar los inscritos a CSV',
@@ -504,6 +543,35 @@ export class AdminController {
     return this.admin.listarInscripciones({ marathonId, status });
   }
 
+  @Get('payments')
+  @Roles('admin', 'organizer')
+  @ApiQuery({ name: 'marathonId', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'pageSize', required: false })
+  @ApiOperation({
+    summary: 'Los tickets: cobros de las maratones, con comprobante y auditoría',
+    description:
+      'Una sola lista para los dos métodos que se validan a mano. Cada fila trae `validatedBy` ' +
+      '—**el nombre de quien lo dio por pagado**— y, si el cobro fue por QR, el `proofId` que ' +
+      'hay que aprobar o rechazar; sin él, lo que aplica es confirmar la transferencia.',
+  })
+  listarPagos(
+    @Query('marathonId') marathonId?: string,
+    @Query('status') status?: PaymentStatus,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.admin.listarPagos({
+      marathonId,
+      status,
+      page: Number(page) || 1,
+      // Techo duro: el tamaño de página lo escribe el cliente y sin límite una
+      // sola llamada se lleva la tabla de dinero entera.
+      pageSize: Math.min(Number(pageSize) || 20, 100),
+    });
+  }
+
   @Get('payments/pending-transfers')
   @Roles('admin', 'organizer')
   @ApiOperation({
@@ -531,6 +599,27 @@ export class AdminController {
     @Body() dto: ConfirmTransferDto,
   ) {
     return this.admin.confirmarTransferencia(id, adminId, dto.reference);
+  }
+
+  @Post('payments/:id/refund')
+  @Roles('admin', 'organizer')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Devolver un cobro y anular la inscripción',
+    description:
+      'Devolver **es** anular: quien recupera su dinero no corre, así que el cupo vuelve al ' +
+      'pozo y el stock de los adicionales también, por el mismo camino que un reembolso del ' +
+      'proveedor. Solo sobre un cobro `paid`, y es idempotente. Fuera de tarjeta no hay ' +
+      'proveedor a quien pedírselo: el dinero lo devuelve una persona por el mismo canal por ' +
+      'el que entró, y lo que queda aquí es el asiento de quién lo ordenó y por qué.',
+  })
+  @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'PAYMENT_ALREADY_SETTLED' })
+  reembolsar(
+    @CurrentUser('sub') adminId: string,
+    @Param('id') id: string,
+    @Body() dto: RefundPaymentDto,
+  ) {
+    return this.admin.reembolsar(id, adminId, dto.reason);
   }
 
   // ─── Resultados ──────────────────────────────────────────────────────────
@@ -563,15 +652,18 @@ export class AdminController {
 
   @Get('users')
   @Roles('admin', 'organizer')
-  @ApiQuery({ name: 'q', required: false, description: 'Busca por email o nombre' })
   @ApiOperation({
     summary: 'Usuarios, sin datos sensibles',
     description:
       'Ni hash de contraseña, ni tokens, ni ubicaciones: lo que no hace falta aquí no se ' +
-      'consulta, y así no puede filtrarse por un descuido.',
+      'consulta, y así no puede filtrarse por un descuido. ' +
+      'Paginado por `page`/`pageSize` —el total va en `meta.total`— y filtrable por `role`. ' +
+      '`q` busca en email, CI, nombre y el celular que dejó en una inscripción. ' +
+      'A un `organizer` se le devuelven **solo corredores**, pida el rol que pida: es el mismo ' +
+      'techo que le impide editar a un admin, aplicado también a mirar.',
   })
-  listarUsuarios(@Query('q') q?: string) {
-    return this.admin.listarUsuarios(q);
+  listarUsuarios(@CurrentUser('role') actorRole: UserRole, @Query() query: ListUsersQueryDto) {
+    return this.admin.listarUsuarios(query, actorRole);
   }
   @Post('users')
   @Roles('admin', 'organizer')
