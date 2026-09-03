@@ -30,7 +30,14 @@ describe('listado de usuarios del panel', () => {
 
   const listar = (query: ListUsersQueryDto, actorRole?: UserRole) =>
     admin.listarUsuarios(query, actorRole);
-  const consulta = () => findMany.mock.calls[0][0] as Record<string, unknown>;
+  // El primer argumento de la primera llamada, tipado: con
+  // noUncheckedIndexedAccess los indices salen posiblemente undefined.
+  const primerArgumento = (mock: jest.Mock): Record<string, unknown> => {
+    const args = (mock.mock.calls as Record<string, unknown>[][])[0];
+    if (!args?.[0]) throw new Error('el mock no recibio argumentos');
+    return args[0];
+  };
+  const consulta = () => primerArgumento(findMany);
 
   it('manda el rol al where, no lo filtra despues', async () => {
     await listar({ role: 'organizer' });
@@ -52,7 +59,7 @@ describe('listado de usuarios del panel', () => {
 
   it('cuenta con el mismo where con el que lista', async () => {
     await listar({ role: 'admin', q: 'ana' });
-    expect(count.mock.calls[0][0]).toEqual({ where: consulta().where });
+    expect(primerArgumento(count)).toEqual({ where: consulta().where });
   });
 
   it('busca en email, ci, nombre y celular', async () => {

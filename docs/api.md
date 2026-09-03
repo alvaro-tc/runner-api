@@ -725,6 +725,10 @@ PUT    /admin/marathons/:id                        ← editar (parcial)
 DELETE /admin/marathons/:id                        ← solo si no tiene inscritos
 POST   /admin/marathons/:id/publish | /unpublish
 POST   /admin/marathons/:id/close-registrations | /reopen-registrations
+POST   /admin/marathons/:id/start | /finish        ← largada y corte de la carrera
+GET    /admin/marathons/:id/live                   ← admin | organizer · mapa en vivo
+POST   /admin/marathons/:id/cover                  ← afiche (multipart, campo `file`)
+POST   /admin/marathons/:id/qr                     ← QR de cobro, imagen de respaldo
 GET    /admin/marathons/:id/registrants.csv        ← admin | organizer
 
 POST   /admin/marathons/:id/categories             ← categorías
@@ -895,6 +899,33 @@ sus dueños siguen viendo su carrera. Solo desaparece del catálogo.
 `closed`; el resto (llena, por cerrar, abierta) se deriva de cupos y fechas al
 leer. Por eso la respuesta trae los dos: `intent` y `resolved`. Una maratón
 reabierta pero llena sigue saliendo `full`, y eso no es un fallo.
+
+### Preparar, largar y cortar
+
+`POST /admin/marathons/:id/start` sella `startedAt` y `POST …/finish` sella
+`finishedAt`. No hay columna de estado: `state` (`not_started`, `preparing`,
+`in_progress`, `finished`) se **deriva de las tres fechas**
+(`marathons/live-status.ts`) y se anuncia por el socket como `marathon:state`. Un
+enum al lado de las fechas sería un segundo sitio que puede discrepar del
+primero, y sin forma de saber cuál mintió.
+
+`GET /admin/marathons/:id/live` es la foto del mapa en vivo —los corredores en
+carrera con su dorsal y su progreso— para arrancar la pantalla antes de que
+llegue el primer `runner:position` por el socket. Abierta al organizador: es
+lectura, y sin ella no puede seguir la carrera que está atendiendo.
+
+### Imágenes de la maratón
+
+`POST /admin/marathons/:id/cover` (afiche) y `POST /admin/marathons/:id/qr` (QR
+de cobro, imagen de respaldo) son `multipart/form-data`, campo `file`, y pasan
+por el mismo `reencodarImagenAWebp` que el avatar: el tipo se decide
+**decodificando**, no leyendo el `Content-Type`, y el reencode tira el EXIF.
+
+Cada subida deja una clave de storage nueva, así que subir otra no pisa el
+archivo anterior, solo el puntero — y una URL dada nunca cambia de contenido.
+Las dos son **solo `admin`**: cambiar el QR es cambiar a qué cuenta va el dinero.
+El QR **como texto** (`paymentQrPayload`, lo que de verdad se pinta) se edita por
+`PUT /admin/marathons/:id`. Ver [`pago-qr-manual.md`](./pago-qr-manual.md).
 
 ### Confirmar una transferencia
 
