@@ -20,6 +20,17 @@ export function salaDeMaraton(marathonId: string): string {
   return `marathon:${marathonId}`;
 }
 
+/**
+ * Sala personal de un usuario. Se entra en el handshake y no se pide.
+ *
+ * Existe porque hay avisos que llegan a alguien que **no esta en ninguna sala
+ * de maraton**: quien espera que le validen el comprobante todavia no esta
+ * inscrito, asi que no hay carrera de la que colgarle la noticia.
+ */
+export function salaDeUsuario(userId: string): string {
+  return `user:${userId}`;
+}
+
 interface SocketDeEspectador extends Socket {
   userId?: string;
 }
@@ -69,6 +80,9 @@ export class LiveGateway implements OnGatewayConnection {
     try {
       const payload = await this.tokens.verifyAccessToken(token);
       socket.userId = payload.sub;
+      // Su sala personal, sin pedirla: es la unica forma de avisar a alguien que
+      // todavia no esta inscrito en nada.
+      await socket.join(salaDeUsuario(payload.sub));
     } catch {
       // Sin mensaje de error: quien no tiene token valido no merece saber si
       // fallo por caducado o por invalido.
@@ -137,14 +151,40 @@ export class LiveGateway implements OnGatewayConnection {
    * estado, y el movil del corredor, que es lo que hace que la pantalla de
    * carrera se abra sola. Va por la sala de la maraton y no por un canal propio
    * porque quien mira esa maraton es exactamente quien tiene que enterarse.
+   *
+   * Ademas va a la sala personal de cada inscrito: el corredor que tiene la app
+   * en la pantalla de inicio no pidio ver esta maraton, y aun asi la
+   * preparacion y la largada tienen que abrirle la pantalla de carrera. Socket
+   * .IO entrega **una sola vez** a quien esta en las dos salas.
    */
-  emitirEstado(marathonId: string, estado: EstadoDeMaraton): void {
+  emitirEstado(
+    marathonId: string,
+    estado: EstadoDeMaraton,
+    inscritos: readonly string[] = [],
+  ): void {
     if (!this.server) {
       this.logger.debug('Gateway sin servidor: no se publica el estado');
       return;
     }
 
-    this.server.to(salaDeMaraton(marathonId)).emit('marathon:state', estado);
+    const salas = [salaDeMaraton(marathonId), ...inscritos.map(salaDeUsuario)];
+    this.server.to(salas).emit('marathon:state', estado);
+  }
+
+  /**
+   * Avisa al dueño de una inscripcion de que algo cambio en ella.
+   *
+   * **Sin datos a proposito**: solo el id. Quien lo recibe vuelve a pedir sus
+   * inscripciones por REST, que es la fuente unica; mandar aqui el estado seria
+   * una segunda version de la verdad que puede llegar desordenada.
+   */
+  emitirInscripcion(userId: string, registrationId: string): void {
+    if (!this.server) {
+      this.logger.debug('Gateway sin servidor: no se publica el cambio de inscripcion');
+      return;
+    }
+
+    this.server.to(salaDeUsuario(userId)).emit('registration:state', { registrationId });
   }
 
   /**

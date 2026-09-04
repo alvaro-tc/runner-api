@@ -340,7 +340,7 @@ export class AdminService {
 
     // Despues de guardar: si el socket se cayo, la carrera arranco igual y el
     // movil se entera al preguntar por REST.
-    this.live.anunciar(estado);
+    await this.live.anunciar(estado);
     this.logger.log(`Maraton ${actualizada.slug} ${arrancar ? 'largada' : 'finalizada'}`);
 
     return { ...estado, slug: actualizada.slug, name: actualizada.name };
@@ -383,7 +383,7 @@ export class AdminService {
     });
 
     const estado = estadoParaElSocket(actualizada);
-    this.live.anunciar(estado);
+    await this.live.anunciar(estado);
     this.logger.log(
       `Maraton ${actualizada.slug} ${opciones.activar ? 'en preparacion' : 'fuera de preparacion'}`,
     );

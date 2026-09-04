@@ -13,6 +13,7 @@ import {
 } from '../../../../generated/prisma/enums';
 import type { PaymentProof } from '../../../../generated/prisma/client';
 import { PaymentsService } from '../payments.service';
+import { LiveService } from '../../realtime/live.service';
 
 /**
  * Formatos que sabemos decodificar. Todo sale convertido a WebP igual.
@@ -67,6 +68,9 @@ export class PaymentProofService {
     // esconderlo moviendo la logica de sitio.
     @Inject(forwardRef(() => PaymentsService))
     private readonly payments: PaymentsService,
+    // Rechazar no cambia la inscripcion —el cobro sigue pendiente—, asi que el
+    // aviso hay que darlo desde aqui: nadie mas lo va a dar.
+    private readonly live: LiveService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -266,6 +270,13 @@ export class PaymentProofService {
     }
 
     this.logger.log(`Comprobante ${proofId} rechazado por ${adminUserId}: ${motivo}`);
+
+    const pago = await this.prisma.payment.findUnique({
+      where: { id: comprobante.paymentId },
+      select: { registrationId: true },
+    });
+
+    if (pago) await this.live.anunciarInscripcion(pago.registrationId);
 
     return this.toDto(await this.buscar(proofId));
   }

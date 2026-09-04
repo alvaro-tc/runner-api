@@ -6,12 +6,15 @@ import { MarathonsService } from '../marathons/marathons.service';
 import { admiteInscripcion, resolverEstado } from '../marathons/registration-status';
 import { QuoteService, type Cotizacion, type LineaCotizacion } from '../pricing/quote.service';
 import { PaymentsService } from '../payments/payments.service';
+import { LiveService } from '../realtime/live.service';
 import type { Prisma } from '../../../generated/prisma/client';
 import { RegistrationStatus } from '../../../generated/prisma/enums';
 import { armarDorsal } from './bib-number';
+import { esCiValida, normalizarCi } from '../auth/ci';
 import type {
   CreateRegistrationDto,
   ListRegistrationsQueryDto,
+  PersonalDataDto,
   UpdateCategoryExtrasDto,
 } from './dto/registration.dto';
 
@@ -67,6 +70,9 @@ export class RegistrationsService {
     // Nest de declararlo en vez de disimularlo moviendo logica de sitio.
     @Inject(forwardRef(() => PaymentsService))
     private readonly payments: PaymentsService,
+    // Solo para avisar: cada cambio de estado de una inscripcion se le cuenta a
+    // su dueño por su sala personal, para que no tenga que esperar al sondeo.
+    private readonly live: LiveService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -115,7 +121,50 @@ export class RegistrationsService {
           include: { marathon: { select: MARATON_DEL_RESUMEN } },
         });
 
+    await this.vincularAlPerfil(userId, dto.personalData);
+
     return this.conCotizacionViva(registro);
+  }
+
+  /**
+   * Deja la CI, el celular y el correo de la inscripcion pegados a la cuenta.
+   *
+   * Asi la siguiente maraton ya los trae puestos y el corredor no vuelve a
+   * teclearlos. No pisa lo que ya hay: el perfil manda sobre un formulario.
+   *
+   * No revienta la inscripcion si falla. Que la CI o el correo ya sean de otra
+   * cuenta es un caso real —dos personas tecleando el mismo documento— y no
+   * puede impedir inscribirse; se queda solo en la inscripcion, como antes.
+   */
+  private async vincularAlPerfil(userId: string, datos: PersonalDataDto): Promise<void> {
+    try {
+      const usuario = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { ci: true, email: true, profile: { select: { phone: true } } },
+      });
+
+      if (!usuario) return;
+
+      const ci = usuario.ci ? null : normalizarCi(datos.docId);
+      const phone = usuario.profile?.phone ? null : datos.phone.trim();
+      const email = usuario.email ? null : (datos.email?.trim() ?? null);
+
+      if (!ci && !phone && !email) return;
+
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: {
+          ...(ci && esCiValida(ci) ? { ci } : {}),
+          ...(email ? { email } : {}),
+          ...(phone ? { profile: { upsert: { create: { phone }, update: { phone } } } } : {}),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `No se pudieron vincular CI/celular/correo al perfil de ${userId}: ` +
+          `${(error as Error).message}`,
+      );
+    }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -345,6 +394,8 @@ export class RegistrationsService {
       `Inscripcion confirmada ${actualizado.id} (dorsal ${actualizado.bibNumber ?? '-'})`,
     );
 
+    await this.live.anunciarInscripcion(actualizado.id);
+
     return this.toDto(actualizado, null);
   }
 
@@ -355,6 +406,8 @@ export class RegistrationsService {
       data: { status: RegistrationStatus.pending_payment },
       include: { marathon: { select: MARATON_DEL_RESUMEN } },
     });
+
+    await this.live.anunciarInscripcion(registro.id);
 
     return this.conCotizacionViva(registro);
   }
@@ -445,6 +498,8 @@ export class RegistrationsService {
         (reembolsados > 0 ? ` (${reembolsados} cobro/s reembolsado/s)` : ''),
     );
 
+    await this.live.anunciarInscripcion(actualizado.id);
+
     return this.toDto(actualizado, null);
   }
 
@@ -493,6 +548,8 @@ export class RegistrationsService {
     });
 
     this.logger.log(`Inscripcion ${actualizado.id} liberada por reembolso del proveedor`);
+
+    await this.live.anunciarInscripcion(actualizado.id);
 
     return this.toDto(actualizado, null);
   }

@@ -1,5 +1,6 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { RegistrationsModule } from '../registrations/registrations.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PAYMENT_PROVIDER } from './payment-provider';
@@ -26,7 +27,7 @@ import { PaymentProofService } from './manual-qr/payment-proof.service';
  * modulo solo esconderia el ciclo detras de una capa mas.
  */
 @Module({
-  imports: [forwardRef(() => RegistrationsModule)],
+  imports: [RealtimeModule, forwardRef(() => RegistrationsModule)],
   controllers: [PaymentsController, PaymentProofController, PaymentProofAdminController],
   providers: [
     PaymentsService,

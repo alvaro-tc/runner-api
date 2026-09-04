@@ -147,17 +147,22 @@ export class TrackingController {
     description:
       'Un punto por peticion, parametros en la query string. Se identifica con el `uniqueId` ' +
       'del dispositivo (`id`) y necesita que ese dispositivo tenga una sesion de tracking ' +
-      'abierta. `timestamp` acepta unix en segundos, en milisegundos o ISO-8601.',
+      'abierta, o una inscripcion confirmada en una maraton en preparacion: en ese caso el ' +
+      'punto se publica a los espectadores y no se guarda (`accepted: 0`). `timestamp` acepta ' +
+      'unix en segundos, en milisegundos o ISO-8601.',
   })
   @ApiResponse({ status: 200, type: IngestResultDto })
   @ApiResponse({
     status: 409,
     type: ErrorResponseDto,
-    description: 'SESSION_NOT_ACTIVE: el dispositivo no tiene ninguna sesion abierta',
+    description: 'SESSION_NOT_ACTIVE: el dispositivo no tiene sesion abierta ni carrera preparando',
   })
-  async osmandIngest(@OsmAndQuery() query: OsmAndQueryDto) {
-    const sesion = await this.tracking.sesionDeDispositivo(query.id);
-    return this.tracking.ingerir(sesion, this.osmand.aPuntos(query), this.osmand.source);
+  osmandIngest(@OsmAndQuery() query: OsmAndQueryDto) {
+    return this.tracking.ingerirDeDispositivo(
+      query.id,
+      this.osmand.aPuntos(query),
+      this.osmand.source,
+    );
   }
 
   /** Los clientes se reparten entre GET y POST; los parametros van igual en la URL. */

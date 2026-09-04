@@ -234,6 +234,9 @@ model UserProfile {
   heightCm         Int?
   /// Dorsal habitual, para prellenar el formulario de inscripcion.
   defaultBibNumber String?
+  /// Celular de contacto. Lo deja la primera inscripcion y prellena las
+  /// siguientes.
+  phone            String?
 
   // ─── Salud ───
   /// Lesiones declaradas: `[{ zone, since, notes }]`.

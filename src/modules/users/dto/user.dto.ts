@@ -49,6 +49,24 @@ export class UpdateMeDto {
   @trim()
   email?: string;
 
+  @ApiPropertyOptional({
+    example: '1234567 LP',
+    description: 'Cedula de identidad. Se guarda normalizada y es unica: es credencial de acceso.',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(40)
+  @trim()
+  ci?: string;
+
+  @ApiPropertyOptional({ example: '+591 70000000', nullable: true })
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  @trim()
+  phone?: string | null;
+
   @ApiPropertyOptional({ example: 'La Paz', nullable: true })
   @IsOptional()
   @IsString()
@@ -172,6 +190,9 @@ export class UserProfileDto {
 
   @ApiProperty({ nullable: true })
   defaultBibNumber!: string | null;
+
+  @ApiProperty({ nullable: true, example: '+591 70000000' })
+  phone!: string | null;
 }
 
 export class MeDto {

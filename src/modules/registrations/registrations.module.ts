@@ -2,6 +2,7 @@ import { Module, forwardRef } from '@nestjs/common';
 import { MarathonsModule } from '../marathons/marathons.module';
 import { PricingModule } from '../pricing/pricing.module';
 import { PaymentsModule } from '../payments/payments.module';
+import { RealtimeModule } from '../realtime/realtime.module';
 import { RegistrationsController } from './registrations.controller';
 import { RegistrationsService } from './registrations.service';
 
@@ -14,7 +15,7 @@ import { RegistrationsService } from './registrations.service';
  * declarada en vez de escondida.
  */
 @Module({
-  imports: [MarathonsModule, PricingModule, forwardRef(() => PaymentsModule)],
+  imports: [MarathonsModule, PricingModule, RealtimeModule, forwardRef(() => PaymentsModule)],
   controllers: [RegistrationsController],
   providers: [RegistrationsService],
   exports: [RegistrationsService],
