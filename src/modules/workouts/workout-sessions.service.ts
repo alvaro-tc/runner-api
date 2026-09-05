@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { nuevoIngestToken } from '../../common/ingest-token';
+import { registrarDispositivo } from '../../common/devices';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { ShoesService, type DistanciaSumada } from '../users/shoes.service';
@@ -393,19 +394,11 @@ export class WorkoutSessionsService {
   }
 
   /**
-   * El dispositivo se registra solo al arrancar una sesion.
-   *
-   * Es la fila que necesita el endpoint compatible con OsmAnd para resolver
-   * `id -> dispositivo -> sesion activa` (Fase 11). Pedirle al usuario un alta
-   * explicita de dispositivo seria una pantalla para un dato que la app ya
-   * tiene.
+   * El dispositivo, al dia. La fila la comparte con el login: ver
+   * `registrarDispositivo` en `common/devices.ts`.
    */
-  private async registrarDispositivo(userId: string, uniqueId: string) {
-    return this.prisma.device.upsert({
-      where: { uniqueId },
-      create: { userId, uniqueId },
-      update: { lastSeenAt: new Date() },
-    });
+  private registrarDispositivo(userId: string, uniqueId: string) {
+    return registrarDispositivo(this.prisma, userId, uniqueId);
   }
 
   private async cambiarEstado(

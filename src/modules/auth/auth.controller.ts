@@ -16,6 +16,7 @@ import { AuthService } from './auth.service';
 import { Public } from './decorators/public.decorator';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { AccessTokenPayload, DeviceInfo } from './token.service';
+import { DISPOSITIVO_DESCONOCIDO } from '../../common/devices';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import {
   AuthSessionResponseDto,
@@ -175,7 +176,7 @@ export class AuthController {
     req: Request,
   ): DeviceInfo {
     return {
-      deviceId: dto.deviceId ?? 'desconocido',
+      deviceId: dto.deviceId ?? DISPOSITIVO_DESCONOCIDO,
       deviceName: dto.deviceName,
       platform: dto.platform,
       ip: req.ip,

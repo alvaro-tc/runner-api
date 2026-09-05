@@ -10,6 +10,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../database/prisma.service';
 import { TokenService } from '../auth/token.service';
+import { UserRole } from '../../../generated/prisma/enums';
 import type { EstadoDeMaraton, LlegadaEnVivo, PosicionEnVivo } from './live-state';
 
 /** Namespace del seguimiento en vivo. Separado del resto por si algun dia lo hay. */
@@ -33,6 +34,7 @@ export function salaDeUsuario(userId: string): string {
 
 interface SocketDeEspectador extends Socket {
   userId?: string;
+  role?: UserRole;
 }
 
 /**
@@ -80,6 +82,7 @@ export class LiveGateway implements OnGatewayConnection {
     try {
       const payload = await this.tokens.verifyAccessToken(token);
       socket.userId = payload.sub;
+      socket.role = payload.role;
       // Su sala personal, sin pedirla: es la unica forma de avisar a alguien que
       // todavia no esta inscrito en nada.
       await socket.join(salaDeUsuario(payload.sub));
@@ -96,6 +99,12 @@ export class LiveGateway implements OnGatewayConnection {
    * Se comprueba que exista y este publicada; sin eso, cualquiera podria
    * suscribirse a `marathon:<lo que sea>` y descubrir por el trafico que hay
    * algo detras.
+   *
+   * **Salvo para quien la gestiona.** El panel del admin y el del organizador
+   * miran el mismo mapa de una carrera que todavia no se publico —una prueba,
+   * una que se prepara para manana— y con la regla general ese mapa se queda
+   * mudo: la foto por REST se ve y no vuelve a moverse nunca, que es la peor
+   * forma de fallar porque parece que funciona.
    */
   @SubscribeMessage('spectate')
   async spectate(
@@ -103,9 +112,12 @@ export class LiveGateway implements OnGatewayConnection {
     @MessageBody() body: { marathonId?: string },
   ): Promise<{ ok: boolean; room?: string; error?: string }> {
     const marathonId = typeof body?.marathonId === 'string' ? body.marathonId : '';
+    const gestiona = socket.role === UserRole.admin || socket.role === UserRole.organizer;
 
     const existe = await this.prisma.marathon.count({
-      where: { id: marathonId, publishedAt: { not: null, lte: new Date() } },
+      where: gestiona
+        ? { id: marathonId }
+        : { id: marathonId, publishedAt: { not: null, lte: new Date() } },
     });
 
     if (existe === 0) return { ok: false, error: 'MARATHON_NOT_FOUND' };

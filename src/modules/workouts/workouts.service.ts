@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../database/prisma.service';
+import { registrarDispositivo } from '../../common/devices';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { Paginated } from '../../common/dto/response-envelope';
@@ -603,11 +604,7 @@ export class WorkoutsService {
   }
 
   private registrarDispositivo(userId: string, uniqueId: string) {
-    return this.prisma.device.upsert({
-      where: { uniqueId },
-      create: { userId, uniqueId },
-      update: { lastSeenAt: new Date() },
-    });
+    return registrarDispositivo(this.prisma, userId, uniqueId);
   }
 
   private resultado(

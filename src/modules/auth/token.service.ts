@@ -6,6 +6,7 @@ import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
+import { registrarDispositivo } from '../../common/devices';
 import { HttpStatus } from '@nestjs/common';
 
 /** Lo que va firmado dentro del access token. Minimo a proposito. */
@@ -73,6 +74,12 @@ export class TokenService {
   async issueForNewSession(userId: string, role: UserRole, device: DeviceInfo): Promise<TokenPair> {
     const refreshToken = randomBytes(32).toString('base64url');
 
+    // El telefono queda registrado como dispositivo desde el login, no desde la
+    // primera grabacion: es lo que permite resolver sus puntos de OsmAnd —la
+    // posicion en la salida, antes de que exista ninguna sesion— a esta
+    // persona. Ver `registrarDispositivo`.
+    await registrarDispositivo(this.prisma, userId, device.deviceId);
+
     const session = await this.prisma.authSession.create({
       data: {
         userId,
@@ -137,6 +144,11 @@ export class TokenService {
         HttpStatus.UNAUTHORIZED,
       );
     }
+
+    // En cada refresco tambien: cubre al que ya tenia sesion abierta antes de
+    // que esto existiera, y devuelve el telefono a su dueño actual cuando dos
+    // cuentas se turnan en el mismo aparato.
+    await registrarDispositivo(this.prisma, session.userId, session.deviceId);
 
     const nuevoRefresh = randomBytes(32).toString('base64url');
 

@@ -79,9 +79,17 @@ export class OsmAndSource implements PositionIngestionSource<OsmAndQueryDto> {
     return [
       {
         // El protocolo no manda identificador de punto, asi que lo fabricamos
-        // con el segundo exacto: un tracker que reintenta manda el mismo
-        // timestamp, y el dedupe lo caza igual que con la app.
-        clientPointId: `osmand-${Math.floor(recordedAt.getTime() / 1000)}`,
+        // con el dispositivo y el segundo exacto: un tracker que reintenta manda
+        // el mismo timestamp, y el dedupe lo caza igual que con la app.
+        //
+        // **El dispositivo tiene que ir dentro.** El indice unico de `positions`
+        // es `(clientPointId, recordedAt)` y es global, no por sesion: sin el
+        // `id`, dos corredores que mandan su punto en el mismo segundo —lo
+        // normal en una salida de cien personas— generan la misma clave y el
+        // `skipDuplicates` se come todos menos el primero. El mapa parecia
+        // funcionar (la publicacion va antes del guardado) y la carrera se
+        // guardaba entera menos casi todos sus puntos.
+        clientPointId: `osmand-${q.id}-${Math.floor(recordedAt.getTime() / 1000)}`,
         recordedAt,
         lat: Number(q.lat),
         lng: Number(q.lon),
