@@ -9,6 +9,7 @@ import { MailService } from '../mail/mail.service';
 import { hashPassword } from './password';
 import { esCiValida, esEmail, normalizarCi } from './ci';
 import { DeviceInfo, TokenService } from './token.service';
+import { GoogleVerifier } from './social/google.verifier';
 import type {
   ChangePasswordDto,
   ForgotPasswordDto,
@@ -28,6 +29,9 @@ export interface UserPublic {
   role: string;
   mustChangePassword: boolean;
   onboardingSeenAt: string | null;
+  /// `false` en las cuentas que entraron con Google y nunca pusieron una. La
+  /// app lo necesita para no ofrecer "cambiar contrasena" a quien no tiene.
+  hasPassword: boolean;
 }
 
 @Injectable()
@@ -39,6 +43,7 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly mail: MailService,
     private readonly config: AppConfigService,
+    private readonly google: GoogleVerifier,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -60,6 +65,9 @@ export class AuthService {
 
     const passwordHash = await hashPassword(dto.password);
 
+    // El alta solo pide credenciales: pedir el nombre en el registro es lo que
+    // hace abandonar el formulario. Si no viene, entra uno provisional (la parte
+    // local del email, o la CI) y el usuario pone el real en su perfil.
     // Perfil y preferencias nacen con el usuario: asi ningun endpoint tiene que
     // preguntarse si existen, y `onboardingSeenAt` empieza en null de verdad.
     const user = await this.prisma.user.create({
@@ -67,7 +75,7 @@ export class AuthService {
         email: dto.email ?? null,
         ci,
         passwordHash,
-        name: dto.name,
+        name: dto.name || dto.email?.split('@')[0] || (ci as string),
         profile: {
           create: {
             birthDate: dto.birthDate ? new Date(dto.birthDate) : null,
@@ -116,6 +124,63 @@ export class AuthService {
     const pair = await this.tokens.issueForNewSession(user.id, user.role, device);
 
     return { ...pair, user: this.toPublic(user, user.preferences?.onboardingSeenAt ?? null) };
+  }
+
+  /**
+   * Entra con Google, creando la cuenta si es la primera vez.
+   *
+   * **La identidad es el email verificado por Google**, no un id de proveedor
+   * guardado aparte: el email ya es unico en `users` y ya es una credencial de
+   * acceso, asi que una tabla `SocialAccount` no anadiria nada que la fila del
+   * usuario no diga. Vincular por email es seguro **solo** porque
+   * `GoogleVerifier` rechaza los correos sin verificar; sin esa condicion esto
+   * seria la forma de entrar en la cuenta de otro.
+   *
+   * La cuenta nueva nace con `passwordHash` nulo: no tiene contrasena y lo
+   * dice. `login()` ya lo trata como fallo —verifica contra un hash ficticio
+   * para no delatar por tiempo que la cuenta no tiene clave— y `hasPassword`
+   * deja que la app sepa si tiene sentido pedirsela. Quien quiera ademas una
+   * contrasena normal la pone por "olvide mi contrasena".
+   */
+  async loginWithGoogle(idToken: string, device: DeviceInfo) {
+    const { email, name } = await this.google.verify(idToken);
+
+    const existente = await this.prisma.user.findUnique({
+      where: { email },
+      include: { preferences: true },
+    });
+
+    // Cuenta borrada: el email sigue ocupado hasta la purga diferida, asi que
+    // ni se reutiliza la fila ni se crea otra. Mismo error opaco que en login.
+    if (existente?.deletedAt) {
+      throw new AppException(
+        ErrorCode.INVALID_CREDENTIALS,
+        'Email o contrasena incorrectos',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    const user =
+      existente ??
+      (await this.prisma.user.create({
+        data: {
+          email,
+          passwordHash: null,
+          name: name || email.split('@')[0] || email,
+          // Nadie le impuso una contrasena: no hay nada que forzarle a cambiar.
+          mustChangePassword: false,
+          profile: { create: {} },
+          preferences: { create: {} },
+        },
+        include: { preferences: true },
+      }));
+
+    const pair = await this.tokens.issueForNewSession(user.id, user.role, device);
+
+    return {
+      ...pair,
+      user: this.toPublic(user, user.preferences?.onboardingSeenAt ?? null),
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -301,6 +366,7 @@ export class AuthService {
       name: string;
       role: string;
       mustChangePassword: boolean;
+      passwordHash: string | null;
     },
     onboardingSeenAt: Date | null,
   ): UserPublic {
@@ -312,6 +378,7 @@ export class AuthService {
       role: user.role,
       mustChangePassword: user.mustChangePassword,
       onboardingSeenAt: onboardingSeenAt?.toISOString() ?? null,
+      hasPassword: user.passwordHash !== null,
     };
   }
 
@@ -391,6 +458,17 @@ export class AuthService {
 
     if (!user || user.deletedAt) {
       throw new AppException(ErrorCode.NOT_FOUND, 'Usuario no encontrado', HttpStatus.NOT_FOUND);
+    }
+
+    // Cuenta de Google sin contrasena: no hay "actual" que comprobar. Decirlo
+    // en claro no filtra nada —quien pregunta ya esta autenticado como el— y
+    // evita el callejon de "la contrasena actual no es correcta" para siempre.
+    if (!user.passwordHash) {
+      throw new AppException(
+        ErrorCode.NO_PASSWORD_SET,
+        'Esta cuenta entra con Google. Usa "olvide mi contrasena" para ponerle una.',
+        HttpStatus.CONFLICT,
+      );
     }
 
     const valida = await argon2.verify(user.passwordHash, dto.currentPassword).catch(() => false);

@@ -85,7 +85,7 @@ describe('Auth (e2e)', () => {
     const user = await prisma.user.findUnique({ where: { email } });
 
     expect(user?.passwordHash).not.toContain(password);
-    expect(user?.passwordHash.startsWith('$argon2id$')).toBe(true);
+    expect(user?.passwordHash?.startsWith('$argon2id$')).toBe(true);
   });
 
   it('rechaza un email ya registrado con EMAIL_ALREADY_REGISTERED', async () => {

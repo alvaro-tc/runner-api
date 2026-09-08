@@ -187,7 +187,13 @@ model User {
   /// con email o con CI, y es la clave con la que la web de inscripcion cruza
   /// un pago con la cuenta que ya existe en la app.
   ci                 String?   @unique
-  passwordHash       String
+  /// **Opcional**: `null` en las cuentas que entraron con Google y nunca
+  /// pusieron contrasena. Nulo y no un hash aleatorio a proposito: con un hash
+  /// falso, "¿este usuario tiene contrasena?" deja de tener respuesta, y esa
+  /// pregunta la hacen el cambio de contrasena y la app para saber si pedirla.
+  /// `login()` ya trata el nulo como fallo, verificando contra un hash ficticio
+  /// para no delatar por tiempo que la cuenta no tiene clave.
+  passwordHash       String?
   /// El usuario entro con una contrasena que no eligio el (alta desde la web:
   /// usuario CI, contrasena CI). La app le exige cambiarla antes de dejarle
   /// hacer nada. Ver `docs/pago-qr-manual.md`.

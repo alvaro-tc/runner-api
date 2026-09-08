@@ -42,6 +42,9 @@ export const ErrorCode = {
   TOKEN_REUSE_DETECTED: 'TOKEN_REUSE_DETECTED',
   /** El enlace de recuperacion no existe, ya se uso o caduco. */
   INVALID_RESET_TOKEN: 'INVALID_RESET_TOKEN',
+  /** La cuenta no tiene contrasena (entro con Google): no hay "actual" que
+   *  comprobar. El cliente debe mandarla por "olvide mi contrasena". */
+  NO_PASSWORD_SET: 'NO_PASSWORD_SET',
   /** Autenticado, pero el rol no alcanza para esta operacion. */
   INSUFFICIENT_ROLE: 'INSUFFICIENT_ROLE',
 

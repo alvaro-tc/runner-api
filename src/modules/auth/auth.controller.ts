@@ -23,6 +23,7 @@ import {
   AuthUserDto,
   ChangePasswordDto,
   ForgotPasswordDto,
+  GoogleLoginDto,
   LoginDto,
   LogoutDto,
   RefreshDto,
@@ -74,6 +75,28 @@ export class AuthController {
   @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'INVALID_CREDENTIALS' })
   login(@Body() dto: LoginDto, @Req() req: Request) {
     return this.auth.login(dto, this.device(dto, req));
+  }
+
+  @Public()
+  @Post('google')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(LIMITE_CREDENCIALES)
+  @ApiOperation({
+    summary: 'Entra con Google; crea la cuenta si el correo no tenia una',
+    description:
+      'Recibe el ID token del SDK nativo de Google. Si el correo verificado ya ' +
+      'tiene cuenta, entra en ella; si no, la crea. Devuelve el mismo par de ' +
+      'tokens que /auth/login.',
+  })
+  @ApiResponse({ status: 200, type: AuthSessionResponseDto })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'INVALID_CREDENTIALS' })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description: 'SERVICE_UNAVAILABLE: falta GOOGLE_WEB_CLIENT_ID en el entorno',
+  })
+  google(@Body() dto: GoogleLoginDto, @Req() req: Request) {
+    return this.auth.loginWithGoogle(dto.idToken, this.device(dto, req));
   }
 
   @Public()

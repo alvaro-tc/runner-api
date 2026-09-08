@@ -281,3 +281,23 @@ export class HighlightsDto {
   @ApiProperty({ example: 96 })
   totalWorkouts!: number;
 }
+
+/**
+ * Confirmacion del borrado de cuenta.
+ *
+ * La contrasena es **opcional en el DTO pero obligatoria en el servicio** para
+ * quien tiene una: las cuentas que entraron con Google no tienen ninguna que
+ * escribir, y exigirla en la validacion las dejaria sin forma de borrarse —que
+ * es justo lo que Google Play no permite.
+ */
+export class DeleteAccountDto {
+  @ApiPropertyOptional({
+    description:
+      'Obligatoria si la cuenta tiene contrasena (`hasPassword: true` en /auth/me). ' +
+      'Las cuentas de Google la omiten.',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  password?: string;
+}

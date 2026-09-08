@@ -27,6 +27,7 @@ import { AvatarService } from './avatar.service';
 import { UsersService } from './users.service';
 import {
   AvatarDto,
+  DeleteAccountDto,
   HealthProfileDto,
   HighlightsDto,
   MeDto,
@@ -171,6 +172,8 @@ export class UsersController {
   @ApiOperation({
     summary: 'Borra la cuenta y todos sus datos',
     description:
+      'Pide la contrasena para confirmar que es el dueno quien lo pide; las cuentas que entraron ' +
+      'con Google no tienen ninguna y la omiten (`hasPassword: false` en /auth/me). ' +
       'Irreversible y sin papelera. Cancela primero las inscripciones a carreras que todavia no ' +
       'ocurrieron —para que el cupo vuelva al organizador— y despues borra en cascada perfil, ' +
       'entrenamientos, posiciones GPS, planes, sesiones y archivos subidos. Las sesiones se van ' +
@@ -178,8 +181,16 @@ export class UsersController {
       'calle caduca solo en 15 minutos y mientras tanto no resuelve a nadie.',
   })
   @ApiResponse({ status: 200, description: 'La cuenta ya no existe' })
-  deleteAccount(@CurrentUser('sub') userId: string): Promise<{ ok: true }> {
-    return this.users.borrarCuenta(userId);
+  @ApiResponse({
+    status: 401,
+    type: ErrorResponseDto,
+    description: 'INVALID_CREDENTIALS: falta la contrasena o no es correcta',
+  })
+  deleteAccount(
+    @CurrentUser('sub') userId: string,
+    @Body() dto: DeleteAccountDto,
+  ): Promise<{ ok: true }> {
+    return this.users.borrarCuenta(userId, dto.password);
   }
 
   // ─── Highlights ──────────────────────────────────────────────────────────
