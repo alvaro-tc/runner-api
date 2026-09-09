@@ -8,6 +8,7 @@
  */
 
 import { haversine, type Punto } from '../workouts/metrics';
+import type { EstadoEnVivo } from '../marathons/live-status';
 
 /** Lo minimo que necesita un punto para entrar en la cuenta. */
 export type PuntoLive = Pick<Punto, 'recordedAt' | 'lat' | 'lng'>;
@@ -24,6 +25,10 @@ export interface EstadoCorredor {
   ultimoPunto: PuntoLive | null;
   /** Cuando se toco por ultima vez, para poder podar lo abandonado. */
   ultimoUsoMs: number;
+  /** Metros de **trazado oficial** cubiertos. Ver `course.ts`. */
+  progresoM: number;
+  /** Ya se le dio por llegado. Se mira para no detectar la meta dos veces. */
+  terminado: boolean;
 }
 
 export function nuevoEstado(marathonId: string, bib: string | null): EstadoCorredor {
@@ -34,6 +39,8 @@ export function nuevoEstado(marathonId: string, bib: string | null): EstadoCorre
     distanceMeters: 0,
     ultimoPunto: null,
     ultimoUsoMs: Date.now(),
+    progresoM: 0,
+    terminado: false,
   };
 }
 
@@ -145,8 +152,27 @@ function comoPunto(p: PuntoLive): Punto {
  */
 export interface EstadoDeMaraton {
   marathonId: string;
+  /** Los cuatro estados del dia. Ver `marathons/live-status.ts`. */
+  state: EstadoEnVivo;
+  preparingAt: string | null;
+  /** Aviso del organizador mientras prepara. Null = el texto por defecto. */
+  preparingMessage: string | null;
   startedAt: string | null;
   finishedAt: string | null;
+}
+
+/**
+ * Que un corredor cruzo la meta.
+ *
+ * Va por la sala de la maraton, como las posiciones, y lleva **solo el
+ * dorsal**: el panel lo usa para tachar al que ya llego y el movil del propio
+ * corredor para reconocerse y cerrar su pantalla de carrera. Nadie mas puede
+ * sacar de aqui quien es esa persona.
+ */
+export interface LlegadaEnVivo {
+  bib: string | null;
+  distanceMeters: number;
+  t: string;
 }
 
 /**
@@ -157,10 +183,7 @@ export interface EstadoDeMaraton {
  * ventana de cinco segundos son cinco segundos de nada y con un corredor que
  * perdió cobertura, minutos.
  */
-export function foto(
-  estados: Map<string, EstadoCorredor>,
-  marathonId: string,
-): PosicionEnVivo[] {
+export function foto(estados: Map<string, EstadoCorredor>, marathonId: string): PosicionEnVivo[] {
   const posiciones: PosicionEnVivo[] = [];
 
   for (const estado of estados.values()) {

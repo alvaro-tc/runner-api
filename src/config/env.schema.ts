@@ -40,6 +40,30 @@ export const envSchema = z.object({
   /// y corta el ataque automatizado, pero detras de un NAT compartido (una
   /// oficina, una red movil) puede quedarse corto. Los tests lo suben.
   AUTH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(10),
+  /// IDs de cliente de Google Cloud aceptados, separados por comas.
+  ///
+  /// Es la lista de `audience` validos del ID token. Va una lista y no un solo
+  /// valor porque el `aud` que emite Google depende de como pidio el token el
+  /// SDK: normalmente es el cliente **Web** (el `serverClientId`), pero segun
+  /// plataforma y version puede llegar el de Android o el de iOS. Aceptar los
+  /// tres clientes **propios** no afloja nada —siguen siendo del mismo proyecto
+  /// y el token sigue firmado por Google— y evita el fallo mas comun de esta
+  /// integracion, que se manifiesta como un 401 sin pista.
+  ///
+  /// Lo que NUNCA hay que hacer es dejarlo vacio y quitar el `audience`: eso
+  /// aceptaria tokens emitidos para cualquier aplicacion del mundo.
+  ///
+  /// Opcional: sin el, `/auth/google` responde 503 y el resto de la API arranca
+  /// igual. No es un secreto —viajan dentro del APK— asi que va en claro.
+  GOOGLE_CLIENT_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
   /// Peticiones por minuto y por IP en el resto de la API.
   GLOBAL_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
   /// Lotes de posiciones por minuto y POR SESION (no por IP: media maraton sale

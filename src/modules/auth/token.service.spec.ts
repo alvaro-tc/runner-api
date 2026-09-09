@@ -40,14 +40,16 @@ describe('TokenService — rotacion de refresh tokens', () => {
       .fn<Promise<{ id: string }>, [CreateArgs]>()
       .mockImplementation((args) => Promise.resolve({ id: 'sesion-nueva', ...args.data }));
     const findUnique = jest.fn().mockResolvedValue(sesion);
+    const upsert = jest.fn().mockResolvedValue({ id: 'dev_1' });
 
     const prisma = {
       authSession: { findUnique, create, update, updateMany },
+      device: { upsert },
       $transaction: (fn: (tx: unknown) => unknown) =>
         Promise.resolve(fn({ authSession: { update, create } })),
     } as unknown as PrismaService;
 
-    return { prisma, findUnique, create, update, updateMany };
+    return { prisma, findUnique, create, update, updateMany, upsert };
   }
 
   const sesionValida = {
@@ -64,6 +66,25 @@ describe('TokenService — rotacion de refresh tokens', () => {
   };
 
   const device = { deviceId: 'device-1' };
+
+  // Sin fila en `Device` no hay forma de traducir el `id` que manda Traccar a
+  // una persona, y la posicion del corredor en la salida se rechaza. Antes solo
+  // se creaba al grabar el primer entrenamiento: quien se instalaba la app para
+  // su primera maraton no aparecia nunca en el mapa del organizador.
+  it('registra el dispositivo al refrescar, y se lo asigna a quien lo usa', async () => {
+    const { prisma, upsert } = crearPrisma(sesionValida);
+    const service = new TokenService(prisma, jwt, config);
+
+    await service.rotate('refresh-viejo', device);
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { uniqueId: 'device-1' },
+        create: { userId: 'user-1', uniqueId: 'device-1' },
+        update: expect.objectContaining({ userId: 'user-1' }),
+      }),
+    );
+  });
 
   it('rota: revoca el token usado y emite uno distinto', async () => {
     const { prisma, create, update } = crearPrisma(sesionValida);

@@ -92,12 +92,18 @@ export class RegisterDto extends DeviceDto {
   @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
   password!: string;
 
-  @ApiProperty({ example: 'Alvaro Quispe' })
+  @ApiPropertyOptional({
+    example: 'Alvaro Quispe',
+    description:
+      'Opcional. Si no viene, se usa la parte local del email (o la CI) como nombre ' +
+      'provisional: el alta solo pide credenciales y el nombre real se pone en el perfil.',
+  })
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
   @MaxLength(120)
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
-  name!: string;
+  name?: string;
 
   @ApiPropertyOptional({ example: '1995-04-17', description: 'Fecha ISO. Va al perfil.' })
   @IsOptional()
@@ -133,6 +139,22 @@ export class LoginDto extends DeviceDto {
   @IsNotEmpty()
   @MaxLength(128)
   password!: string;
+}
+
+/**
+ * Acceso con Google. El `idToken` lo entrega el SDK nativo en el telefono; el
+ * servidor lo verifica contra Google y saca de ahi el email.
+ *
+ * No hay `password`: la cuenta se crea sola la primera vez.
+ */
+export class GoogleLoginDto extends DeviceDto {
+  @ApiProperty({
+    description: 'ID token de Google (JWT). Lo devuelve `google_sign_in` en la app.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  idToken!: string;
 }
 
 export class RefreshDto extends DeviceDto {
@@ -238,6 +260,13 @@ export class AuthUserDto {
     description: 'Null = el usuario aun no vio el onboarding. Sobrevive a reinstalaciones.',
   })
   onboardingSeenAt!: string | null;
+
+  @ApiProperty({
+    description:
+      'False en las cuentas que entraron con Google y nunca pusieron contrasena. ' +
+      'La app no debe ofrecerles "cambiar contrasena": no hay una actual que pedir.',
+  })
+  hasPassword!: boolean;
 }
 
 export class AuthSessionResponseDto extends TokenPairDto {

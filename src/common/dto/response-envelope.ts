@@ -7,6 +7,10 @@ export interface ResponseMeta {
   timestamp: string;
   /** Solo en listados paginados por cursor. */
   nextCursor?: string | null;
+  /** Solo en listados paginados por pagina: sirven para pintar "1-20 de 340". */
+  total?: number;
+  page?: number;
+  pageSize?: number;
 }
 
 /**
@@ -21,6 +25,14 @@ export class Paginated<T> {
   constructor(
     readonly items: T[],
     readonly nextCursor: string | null,
+    /**
+     * Paginacion por pagina, la excepcion. Solo la usa el listado de usuarios
+     * del panel, que necesita saltar de pagina y decir cuantos hay en total;
+     * un cursor opaco no da ninguna de las dos cosas.
+     */
+    readonly total?: number,
+    readonly page?: number,
+    readonly pageSize?: number,
   ) {}
 }
 
@@ -47,6 +59,18 @@ export class ResponseMetaDto implements ResponseMeta {
 
   @ApiProperty({ required: false, nullable: true, description: 'Cursor de la pagina siguiente' })
   nextCursor?: string | null;
+
+  @ApiProperty({
+    required: false,
+    description: 'Filas que cumplen el filtro, no las de esta pagina',
+  })
+  total?: number;
+
+  @ApiProperty({ required: false })
+  page?: number;
+
+  @ApiProperty({ required: false })
+  pageSize?: number;
 }
 
 export class ApiErrorDto {

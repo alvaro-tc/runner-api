@@ -6,6 +6,7 @@ import { AppConfigService } from '../../config/app-config.service';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { TokenService } from './token.service';
+import { GoogleVerifier } from './social/google.verifier';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
 
@@ -34,6 +35,7 @@ import { RolesGuard } from './guards/roles.guard';
   providers: [
     AuthService,
     TokenService,
+    GoogleVerifier,
     // ORDEN IMPORTANTE: throttler primero (rechaza antes de tocar la base),
     // luego JWT (deja `req.user`), luego roles (que lo necesita puesto).
     { provide: APP_GUARD, useClass: ThrottlerGuard },

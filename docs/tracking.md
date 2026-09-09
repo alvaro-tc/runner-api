@@ -228,9 +228,16 @@ await socket.emitWithAck('leave', { marathonId });
 |---|---|
 | Namespace | `/live` |
 | Sala | `marathon:{id}` |
-| Evento del servidor | `runner:position` |
+| Eventos del servidor | `runner:position`, `runner:finish`, `marathon:state` |
 | Eventos del cliente | `spectate`, `leave` (los dos con ack) |
-| Payload | `{ bib, lat, lng, distanceMeters, t }` |
+| Payload de posición | `{ bib, lat, lng, distanceMeters, t }` |
+| Payload de llegada | `{ bib, distanceMeters, t }` |
+| Payload de estado | `{ marathonId, state, preparingAt, preparingMessage, startedAt, finishedAt }` |
+
+`state` es uno de `not_started`, `preparing`, `in_progress` o `finished`, y **se
+deriva de las tres fechas** (`marathons/live-status.ts`). No hay columna de
+estado: un enum al lado de las fechas sería un segundo sitio que puede
+discrepar del primero, y sin forma de saber cuál mintió.
 
 El token va en **`auth.token`** del handshake y no en la query: la query acaba
 en los logs de acceso del proxy. Se acepta `?token=` igualmente porque hay
@@ -244,6 +251,42 @@ caso es un espectador viendo dorsales quince minutos de más.
 `spectate` comprueba que la maratón exista y esté publicada. Sin eso, cualquiera
 podría suscribirse a `marathon:<lo que sea>` y descubrir por el tráfico que hay
 algo detrás.
+
+### Cuándo se da a alguien por llegado
+
+Lo decide el **servidor**, no el móvil, y lo decide mirando el GPS contra el
+trazado oficial (`realtime/course.ts`). El móvil puede estar en un bolsillo con
+la pantalla apagada, matado por el sistema tras cuatro horas o sin batería justo
+en el arco; la carrera de esa persona no puede depender de eso. Al detectarla,
+el servidor cierra la sesión con el **mismo** cierre que usa el botón de
+finalizar —consolidación, resultado oficial, recálculo de puestos— y anuncia
+`runner:finish` a la sala.
+
+Lo que **no** sirve para decidirlo:
+
+- **La distancia recorrida.** En una ida y vuelta cualquiera junta los 21 km
+  dándose media vuelta antes del punto de giro.
+- **La cercanía a la meta.** En una ida y vuelta el arco de meta está a diez
+  metros del de salida: todo el mundo «llega» en el primer minuto.
+
+Lo que sí: el **avance a lo largo de la línea**. Cada punto se proyecta sobre el
+trazado dentro de una ventana que va de 150 m por detrás a 400 m por delante del
+progreso actual, gana el segmento más cercano, y el progreso nunca retrocede. La
+ida y la vuelta son tramos distintos de la misma polilínea, así que quien se dio
+la vuelta antes se queda clavado en su kilómetro: no tiene línea por delante que
+cubrir.
+
+Las tolerancias salen del sensor, no de la geometría ideal: 60 m de separación
+lateral (el ancho de una avenida más el error típico de un móvil entre
+edificios), 75 m de margen sobre el total de la línea y 60 m de radio alrededor
+del último vértice. Un punto que se sale de la tolerancia **no se descarta**:
+simplemente no hace avanzar el progreso, que es lo correcto para quien se fue de
+la ruta. Y la ventana de 400 m es lo que impide que un salto del GPS —o un
+rebote al carril de enfrente— teletransporte a alguien kilómetros hacia delante.
+
+Sin `routeGeoJson` cargado no hay ruta que comprobar y solo queda el
+cuentakilómetros: se da por llegado al 98 % de la distancia oficial. Es el plan
+B, no la regla.
 
 ### Qué se publica, y qué no
 

@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { LiveService } from '../realtime/live.service';
+import { WorkoutSessionsService } from '../workouts/workout-sessions.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { PositionSource, TrackingSessionStatus } from '../../../generated/prisma/enums';
@@ -43,6 +44,7 @@ export class TrackingService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly live: LiveService,
+    private readonly sesiones: WorkoutSessionsService,
   ) {}
 
   /**
@@ -124,21 +126,85 @@ export class TrackingService {
     // Despues de guardar y nunca antes: lo que no puede perderse es el punto
     // en la base. `publicar` no lanza —si el mapa se cae, el lote ya esta a
     // salvo— y el throttling decide dentro si esto llega a emitir algo.
-    await this.live.publicar(sesion, validos);
+    const llego = await this.live.publicar(sesion, validos);
+
+    if (llego) await this.cerrarPorLlegada(sesion);
 
     return { accepted, duplicated: validos.length - accepted, rejected, reasons };
   }
 
   /**
-   * Resuelve la sesion a la que apunta un dispositivo por su `uniqueId`.
+   * Cierra la carrera de quien acaba de cruzar la meta.
+   *
+   * **Lo cierra el servidor y no el movil** porque el movil puede no estar en
+   * condiciones de hacerlo: la pantalla apagada en el bolsillo, la app matada
+   * por el sistema tras cuatro horas, el telefono sin bateria en el arco. El
+   * corredor cruzo la meta de verdad y su resultado no puede depender de que su
+   * telefono siga vivo para avisar. Con Traccar subiendo por su cuenta, la app
+   * puede llevar horas sin ejecutar una linea.
+   *
+   * Es el **mismo** cierre que llama el boton de finalizar: consolida las
+   * metricas, cuelga las posiciones del entrenamiento y produce el resultado
+   * oficial. Un segundo camino con sus propias reglas es como se acaba con dos
+   * tiempos distintos para la misma carrera.
+   *
+   * No propaga: el lote ya esta guardado, y devolver un 500 a la ingesta por
+   * esto haria que el movil reintentara el mismo lote en bucle.
+   */
+  private async cerrarPorLlegada(sesion: SesionDeIngesta): Promise<void> {
+    try {
+      await this.sesiones.finalizar(sesion.userId, sesion.id, {});
+      this.logger.log(`Carrera cerrada por llegada detectada: sesion ${sesion.id}`);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, sessionId: sesion.id },
+        'No se pudo cerrar la sesion tras detectar la llegada; los puntos se guardaron igual',
+      );
+    }
+  }
+
+  /**
+   * Ingesta por `uniqueId` de dispositivo: el camino de OsmAnd.
+   *
+   * Dos destinos posibles, y el orden importa. Con sesion abierta es una
+   * ingesta normal, que guarda. Sin ella el dispositivo puede estar **calentando
+   * en la salida** —la maraton en preparacion, la sesion la abre la largada—: su
+   * posicion se publica a los espectadores y no se guarda, porque es de antes de
+   * la carrera y no puede acabar en el entrenamiento.
+   *
+   * Lo que no es ninguna de las dos cosas sigue siendo un error: un tracker
+   * olvidado encendido no abre sesiones ni pinta nada.
+   */
+  async ingerirDeDispositivo(
+    uniqueId: string,
+    puntos: readonly PuntoNormalizado[],
+    source: PositionSource,
+  ): Promise<ResultadoIngesta> {
+    const sesion = await this.sesionDeDispositivo(uniqueId);
+
+    if (sesion) return this.ingerir(sesion, puntos, source);
+
+    if (await this.live.publicarCalentamiento(uniqueId, puntos)) {
+      return { accepted: 0, duplicated: 0, rejected: 0, reasons: {} };
+    }
+
+    throw new AppException(
+      ErrorCode.SESSION_NOT_ACTIVE,
+      'Ese dispositivo no tiene ninguna sesion de tracking abierta',
+      HttpStatus.CONFLICT,
+    );
+  }
+
+  /**
+   * La sesion abierta de un dispositivo, si la tiene.
    *
    * Es lo que hace posible el protocolo OsmAnd, que no tiene donde meter un
-   * token de sesion: el tracker solo sabe decir quien es. Si el dispositivo no
-   * tiene ninguna sesion abierta no hay nada que hacer con el punto —no vamos a
-   * abrir una sesion por un GET suelto, porque entonces cualquier tracker
-   * olvidado encendido crearia entrenamientos fantasma.
+   * token de sesion: el tracker solo sabe decir quien es. No abre ninguna por su
+   * cuenta —un GET suelto crearia entrenamientos fantasma— y devolver `null` no
+   * es un error aqui: quien llama decide, porque sin sesion todavia puede ser
+   * alguien calentando antes de la largada.
    */
-  async sesionDeDispositivo(uniqueId: string): Promise<SesionDeIngesta> {
+  private async sesionDeDispositivo(uniqueId: string): Promise<SesionDeIngesta | null> {
     const sesion = await this.prisma.trackingSession.findFirst({
       where: {
         device: { uniqueId },
@@ -155,14 +221,6 @@ export class TrackingService {
         marathonId: true,
       },
     });
-
-    if (!sesion) {
-      throw new AppException(
-        ErrorCode.SESSION_NOT_ACTIVE,
-        'Ese dispositivo no tiene ninguna sesion de tracking abierta',
-        HttpStatus.CONFLICT,
-      );
-    }
 
     return sesion;
   }

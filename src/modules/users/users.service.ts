@@ -1,9 +1,11 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import * as argon2 from 'argon2';
 import { AppConfigService } from '../../config/app-config.service';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { camposPresentes } from '../../common/utils/patch';
+import { esCiValida, normalizarCi } from '../auth/ci';
 import { rangoSemanal } from '../../common/time/week';
 import { StorageService } from '../storage/storage.service';
 import { RegistrationsService } from '../registrations/registrations.service';
@@ -21,6 +23,7 @@ const CAMPOS_DE_PERFIL = [
   'weightGrams',
   'heightCm',
   'defaultBibNumber',
+  'phone',
 ] as const;
 
 @Injectable()
@@ -61,7 +64,7 @@ export class UsersService {
   async updateMe(userId: string, dto: UpdateMeDto) {
     const actual = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, deletedAt: true },
+      select: { id: true, email: true, ci: true, deletedAt: true },
     });
 
     if (!actual || actual.deletedAt) {
@@ -88,6 +91,34 @@ export class UsersService {
 
       datosUsuario.email = dto.email;
       datosUsuario.emailVerifiedAt = null;
+    }
+
+    // La CI es credencial de acceso: se guarda normalizada, igual que en el
+    // alta, o el usuario que la teclea con guion se queda fuera de su cuenta.
+    if (dto.ci) {
+      const ci = normalizarCi(dto.ci);
+
+      if (!esCiValida(ci)) {
+        throw new AppException(
+          ErrorCode.VALIDATION_ERROR,
+          'La CI no tiene un formato valido',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      if (ci !== actual.ci) {
+        const ocupada = await this.prisma.user.findUnique({ where: { ci }, select: { id: true } });
+
+        if (ocupada) {
+          throw new AppException(
+            ErrorCode.CI_ALREADY_REGISTERED,
+            'Ya existe una cuenta con esa CI',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        datosUsuario.ci = ci;
+      }
     }
 
     const datosPerfil: Prisma.UserProfileUpdateInput = camposPresentes(dto, CAMPOS_DE_PERFIL);
@@ -290,6 +321,7 @@ export class UsersService {
         weightGrams: p?.weightGrams ?? null,
         heightCm: p?.heightCm ?? null,
         defaultBibNumber: p?.defaultBibNumber ?? null,
+        phone: p?.phone ?? null,
       },
     };
   }
@@ -322,7 +354,46 @@ export class UsersService {
    * descuido —un entrenamiento, una inscripcion—, no para una cuenta que su
    * dueno pidio borrar: eso seria conservar sus datos diciendo que no.
    */
-  async borrarCuenta(userId: string): Promise<{ ok: true }> {
+  /**
+   * El borrado es irreversible y el telefono puede estar en otras manos, asi
+   * que no basta con la sesion abierta: hay que demostrar que se es el dueno.
+   *
+   * Quien entro con Google no tiene contrasena que escribir. Para esos la
+   * sesion es la unica prueba que existe, y exigir una contrasena inventada
+   * solo conseguiria que no pudieran borrarse nunca — algo que Google Play
+   * exige que se pueda. La comprobacion es por eso condicional al dato, no al
+   * cliente: es el servidor quien mira si hay hash, no el que lo pide.
+   */
+  private async exigirConfirmacion(userId: string, password?: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true },
+    });
+
+    if (!user) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'Usuario no encontrado', HttpStatus.NOT_FOUND);
+    }
+
+    // Cuenta de Google: sin contrasena que comprobar, la sesion ya la valida.
+    if (!user.passwordHash) return;
+
+    const valida = password
+      ? await argon2.verify(user.passwordHash, password).catch(() => false)
+      : false;
+
+    if (!valida) {
+      throw new AppException(
+        ErrorCode.INVALID_CREDENTIALS,
+        'La contrasena no es correcta',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+  }
+
+  async borrarCuenta(userId: string, password?: string): Promise<{ ok: true }> {
+    await this.exigirConfirmacion(userId, password);
+
+
     const vigentes = await this.prisma.registration.findMany({
       where: {
         userId,
@@ -425,6 +496,7 @@ interface PerfilCrudo {
   weightGrams: number | null;
   heightCm: number | null;
   defaultBibNumber: string | null;
+  phone: string | null;
 }
 
 /**

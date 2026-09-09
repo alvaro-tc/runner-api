@@ -400,11 +400,103 @@ export class PaymentsService {
     return count;
   }
 
-  private marcarReembolsado(pago: Payment, motivo: string): Promise<unknown> {
+  /**
+   * Marca el cobro como devuelto.
+   *
+   * `adminUserId` solo viene cuando la devolucion la ordeno una persona desde
+   * el panel; un reembolso del proveedor o el de una cancelacion del propio
+   * corredor no tienen a nadie a quien atribuirsela, y firmarlos con alguien
+   * seria inventar una auditoria.
+   *
+   * El `updateMany` condicionado a `paid` es lo que hace esto idempotente: dos
+   * clics seguidos devuelven el dinero una sola vez.
+   */
+  private marcarReembolsado(
+    pago: Payment,
+    motivo: string,
+    adminUserId?: string,
+  ): Promise<{ count: number }> {
     return this.prisma.payment.updateMany({
       where: { id: pago.id, status: PaymentStatus.paid },
-      data: { status: PaymentStatus.refunded, refundedAt: new Date(), failureReason: motivo },
+      data: {
+        status: PaymentStatus.refunded,
+        refundedAt: new Date(),
+        failureReason: motivo,
+        ...(adminUserId ? { refundedById: adminUserId } : {}),
+      },
     });
+  }
+
+  /**
+   * Devuelve el dinero de un cobro, por decision de una persona del panel.
+   *
+   * **Devolver es anular la inscripcion**, no solo mover dinero: quien recupera
+   * su plata no corre. Por eso suelta el cupo por `liberarPorReembolso()` —el
+   * mismo camino que usa el reembolso del proveedor— y no hay una segunda
+   * implementacion de "soltar una plaza"; una plaza devuelta a medias es la que
+   * bloquea el cupo de otro corredor para siempre.
+   *
+   * El orden es a proposito: primero el estado del cobro, condicionado a
+   * `paid`, y solo quien gana esa carrera sigue. Al reves, dos organizadores
+   * impacientes soltarian el cupo dos veces.
+   *
+   * Al proveedor se le pide la devolucion cuando la hubo. Los cobros por QR y
+   * por transferencia no pasaron por ninguno: ahi el dinero lo devuelve una
+   * persona por el mismo canal por el que entro, y lo que hace este endpoint es
+   * dejar constancia de que se ordeno y de quien la ordeno.
+   */
+  async reembolsarManualmente(paymentId: string, adminUserId: string, motivo: string) {
+    const pago = await this.prisma.payment.findUnique({ where: { id: paymentId } });
+
+    if (!pago) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'El pago no existe', HttpStatus.NOT_FOUND);
+    }
+
+    if (pago.status !== PaymentStatus.paid) {
+      throw new AppException(
+        ErrorCode.PAYMENT_ALREADY_SETTLED,
+        pago.status === PaymentStatus.refunded
+          ? 'Ese cobro ya se devolvio'
+          : 'Solo se puede devolver un cobro que este pagado',
+        HttpStatus.CONFLICT,
+        [{ status: pago.status }],
+      );
+    }
+
+    const { count } = await this.marcarReembolsado(pago, motivo, adminUserId);
+
+    if (count === 0) {
+      throw new AppException(
+        ErrorCode.PAYMENT_ALREADY_SETTLED,
+        'Ese cobro lo acaba de cerrar alguien mas',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    // Fuera del proveedor no hay a quien pedirle nada, pero el fallo tampoco
+    // puede tumbar la operacion: el cobro ya consta como devuelto y lo que
+    // queda es mover el dinero, que se resuelve por el mismo canal a mano.
+    if (pago.externalId && pago.method !== PaymentMethod.qr_manual) {
+      try {
+        await this.provider.refund(pago.externalId);
+      } catch (error) {
+        this.logger.error(
+          `El proveedor no acepto la devolucion del cobro ${pago.id}: hay que hacerla a mano`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      }
+    } else {
+      this.logger.warn(
+        `Cobro ${pago.id} (${pago.method}): la devolucion del dinero es manual, ` +
+          'no hay proveedor que la haga',
+      );
+    }
+
+    await this.registrations.liberarPorReembolso(pago.registrationId);
+
+    this.logger.log(`Cobro ${pago.id} devuelto por ${adminUserId}: ${motivo}`);
+
+    return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -628,6 +720,10 @@ export class PaymentsService {
         status: PaymentStatus.paid,
         paidAt: new Date(),
         failureReason: null,
+        // La columna es la que se audita —se une con `users` y devuelve un
+        // nombre—; el JSON se sigue escribiendo porque es lo que lee el panel
+        // web de hoy y quitarlo seria un cambio suyo, no de este flujo.
+        confirmedById: adminUserId,
         methodDetails: {
           ...(pago.methodDetails as object),
           bank: { reference: referencia ?? null, confirmedBy: adminUserId },

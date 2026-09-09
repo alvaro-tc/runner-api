@@ -1,44 +1,61 @@
-# Login social — no implementado (a propósito)
+# Login social
 
-Los botones de Google, LinkedIn y Facebook de la app son **solo UI** por ahora.
-Este directorio existe para marcar dónde irá el flujo real y para que quede
-escrito qué falta, en vez de dejar el tema flotando.
+**Google: implementado.** `POST /api/v1/auth/google`.
+**Facebook y LinkedIn: descartados** — sus botones ya no existen en la app.
 
-## Por qué no está implementado
+## Google — como funciona
 
-El flujo real no es código: es papeleo. Cada proveedor exige una aplicación
-registrada, credenciales, URLs de redirección declaradas y — en el caso de
-Facebook y LinkedIn — una revisión antes de poder pedir el email del usuario.
-Escribir la estrategia sin nada de eso produce código que no se puede ni
-ejecutar ni probar.
+El SDK nativo (`google_sign_in` en Flutter) es el cliente OAuth 2.0. La app no
+abre navegador ni maneja redirecciones: obtiene un **ID token** —un JWT firmado
+por Google— y lo manda a `POST /auth/google`. `GoogleVerifier` comprueba la
+firma y el `audience` contra `GOOGLE_WEB_CLIENT_ID`, y de ahi sale el email.
 
-## Qué haría falta para activarlo
+La respuesta es **la misma** que la de `/auth/login`: `TokenService
+.issueForNewSession` emite el par de tokens y la rotacion de 60 dias funciona
+igual. El cliente no distingue como entro.
 
-1. **Registrar la app** en cada proveedor y obtener `clientId` / `clientSecret`.
-   - Google: Google Cloud Console → OAuth consent screen + credenciales.
-   - Facebook: Meta for Developers, con revisión para el permiso `email`.
-   - LinkedIn: LinkedIn Developers, producto *Sign In with LinkedIn*.
-2. **Declarar los redirect URI**, incluido el esquema de la app móvil para el
-   retorno desde el navegador del sistema.
-3. **Añadir las credenciales al esquema de entorno** (`src/config/env.schema.ts`),
-   opcionales, para que la ausencia de un proveedor no impida arrancar.
-4. **Modelo de datos:** una tabla `SocialAccount` con
-   `(provider, providerAccountId)` único, `userId`, y los tokens del proveedor.
-   No hace falta tocar `User`.
-5. **Decidir la política de vinculación por email** — es la parte con filo:
-   si alguien se registró con `ana@mail.com` y contraseña, y después entra con
-   Google usando ese mismo email, ¿es la misma cuenta? Vincular automáticamente
-   es cómodo y es exactamente el agujero por el que se toma una cuenta ajena si
-   el proveedor no verificó el email. La regla segura: vincular solo si el
-   proveedor marca el email como verificado, y si no, pedir la contraseña
-   existente antes de unir las cuentas.
-6. **En Flutter:** abrir el flujo en el navegador del sistema (no en un webview
-   embebido, que los proveedores rechazan), capturar el retorno por deep link y
-   canjearlo en `POST /api/v1/auth/social/:provider`.
+## Decisiones que no son obvias
 
-## Lo que ya está resuelto y no habría que rehacer
+**No hay tabla `SocialAccount`.** La identidad es el email verificado, que ya es
+unico en `users` y ya es credencial de acceso. Una tabla de vinculacion no diria
+nada que la fila del usuario no diga. Si algun dia entra un segundo proveedor,
+ese es el momento de crearla, no antes.
 
-El resultado del login social es el mismo par de tokens que emite el login
-normal. `TokenService.issueForNewSession(userId, role, device)` es el punto de
-entrada: una vez resuelto qué usuario es, la sesión, la rotación de 60 días y la
-detección de reuso funcionan igual. La parte difícil de la sesión ya está hecha.
+**Vincular por email es seguro solo por una condicion:** `GoogleVerifier` exige
+`email_verified`. Sin ella, un dominio de Workspace mal configurado emite una
+identidad con el correo de otra persona y eso es entrar en su cuenta. Si alguna
+vez se relaja esa comprobacion, hay que pedir la contrasena antes de vincular.
+
+**La cuenta nueva nace con un hash aleatorio, no con `passwordHash` nulo.** Asi
+`login()` no necesita un caso especial: la comparacion contra ese hash nunca
+acierta y el usuario simplemente no tiene contrasena. Si la quiere, la pone por
+"olvide mi contrasena". Un `passwordHash` nulo obligaria a una migracion y a
+recordar el `if` en cada sitio que compara contrasenas — el dia que uno se
+olvide, contrasena vacia = entrar.
+
+**`GOOGLE_CLIENT_IDS` es una lista, no un valor.** El `aud` del ID token
+depende de como pidio el token el SDK: normalmente es el cliente Web (el
+`serverClientId`), pero segun plataforma y version puede llegar el de Android o
+el de iOS. Aceptar los tres clientes **del mismo proyecto** no afloja nada y
+evita el fallo mas comun de esta integracion, que se manifiesta como un 401 sin
+pista. Lo que nunca se puede hacer es quitar el `audience`.
+
+**Es opcional.** Sin el, la API arranca igual y `/auth/google` responde 503, para
+que un entorno sin credenciales no tire todo lo demas.
+
+## Configuracion
+
+`GOOGLE_CLIENT_IDS`: los IDs de cliente del proyecto de Google Cloud separados
+por comas (web, android, ios). No son secretos: viajan dentro del APK.
+
+En la **app** hay que pasar el del cliente **Web** como `serverClientId` — ese
+si tiene que ser exactamente ese y no otro, porque es lo que le dice a Google
+para quien emitir el token.
+
+## Facebook y LinkedIn
+
+Descartados. Los dos exigen una revision de la app para poder pedir el email, y
+sin email no hay forma de saber de quien es la cuenta. Para el volumen de
+usuarios de PaceUp, ese papeleo no se paga. Si algun dia se retoman, el patron
+de arriba sirve tal cual: verificar, sacar el email verificado, reutilizar
+`issueForNewSession`.

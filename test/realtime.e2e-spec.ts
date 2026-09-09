@@ -6,10 +6,26 @@ import { randomUUID } from 'node:crypto';
 import { io, type Socket } from 'socket.io-client';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/database/prisma.service';
+import { AdminService } from '../src/modules/admin/admin.service';
 
 interface Envelope<T> {
   data: T;
   meta: { requestId: string; timestamp: string };
+}
+
+interface LlegadaEnVivo {
+  bib: string | null;
+  distanceMeters: number;
+  t: string;
+}
+
+interface EstadoDeMaraton {
+  marathonId: string;
+  state: string;
+  preparingAt: string | null;
+  preparingMessage: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 interface PosicionEnVivo {
@@ -73,6 +89,17 @@ describe('Realtime (e2e)', () => {
     return new Promise((listo) => {
       const temporizador = setTimeout(() => listo(null), ms);
       socket.once('runner:position', (payload: PosicionEnVivo) => {
+        clearTimeout(temporizador);
+        listo(payload);
+      });
+    });
+  }
+
+  /** Espera un evento del socket, o `null` si no llega. */
+  function esperar<T>(socket: Socket, evento: string, ms = 2500): Promise<T | null> {
+    return new Promise((listo) => {
+      const temporizador = setTimeout(() => listo(null), ms);
+      socket.once(evento, (payload: T) => {
         clearTimeout(temporizador);
         listo(payload);
       });
@@ -249,6 +276,42 @@ describe('Realtime (e2e)', () => {
       expect(await esperando).toBeNull();
     });
 
+    it('avisa a la sala cuando la maraton entra en preparacion', async () => {
+      const socket = await espectador(marathonId);
+      const esperando = esperar<EstadoDeMaraton>(socket, 'marathon:state');
+
+      await app.get(AdminService).preparar(marathonId, { activar: true, message: 'Salimos 06:45' });
+
+      const estado = await esperando;
+
+      expect(estado).not.toBeNull();
+      expect(estado!.state).toBe('preparing');
+      expect(estado!.preparingMessage).toBe('Salimos 06:45');
+      expect(estado!.startedAt).toBeNull();
+
+      // La marcha atras devuelve la app a los inscritos.
+      const volviendo = esperar<EstadoDeMaraton>(socket, 'marathon:state');
+      await app.get(AdminService).preparar(marathonId, { activar: false });
+
+      expect((await volviendo)!.state).toBe('not_started');
+    });
+
+    it('el inscrito ve la preparacion en sus carreras', async () => {
+      await app.get(AdminService).preparar(marathonId, { activar: true, message: 'Ya casi' });
+
+      const res = await http().get('/api/v1/races/me').set(auth()).expect(200);
+      const { data } = res.body as Envelope<
+        { registrationId: string; marathon: { liveState: string; preparingMessage: string } }[]
+      >;
+      const mia = data.find((c) => c.registrationId === registrationId);
+
+      expect(mia).toBeDefined();
+      expect(mia!.marathon.liveState).toBe('preparing');
+      expect(mia!.marathon.preparingMessage).toBe('Ya casi');
+
+      await app.get(AdminService).preparar(marathonId, { activar: false });
+    });
+
     it('la sala de otra maraton no ve nada', async () => {
       const mirandoOtra = await espectador(otraMarathonId);
       const { sessionId, ingestToken } = await arrancar({ type: 'race', registrationId });
@@ -283,6 +346,145 @@ describe('Realtime (e2e)', () => {
       await ingerir(sessionId, ingestToken, 0, 10);
 
       expect(await esperando).toBeNull();
+    });
+  });
+
+  /**
+   * Llegada a meta detectada por GPS, en el caso que rompe cualquier atajo: la
+   * **ida y vuelta**. La distancia recorrida no vale —el corredor puede darse
+   * la vuelta antes y juntar los metros igual— y la cercania a la meta tampoco
+   * —el arco de meta esta pegado al de salida—. Lo que vale es cuanta linea
+   * oficial cubrio. Ver `realtime/course.ts`.
+   */
+  describe('llegada por GPS', () => {
+    /** Ida de 0 a 300 m hacia el norte, y vuelta. 600 m de trazado. */
+    const IDA_M = 300;
+    const PASO_M = 20;
+
+    const comoLat = (metros: number) => metros / METROS_POR_GRADO_LAT;
+
+    let idaYVueltaId = '';
+    let inscripcionIdaYVuelta = '';
+
+    /** Manda los puntos de un recorrido, uno por segundo, acabando ahora. */
+    function correr(sessionId: string, ingestToken: string, metros: number[]) {
+      const fin = Date.now();
+
+      return http()
+        .post(`/api/v1/tracking/sessions/${sessionId}/positions`)
+        .set({ Authorization: `Bearer ${ingestToken}` })
+        .send({
+          points: metros.map((m, i) => ({
+            clientPointId: `${sessionId}-ruta-${i}`,
+            recordedAt: new Date(fin - (metros.length - i) * 1000).toISOString(),
+            lat: comoLat(m),
+            lng: 0,
+            accuracy: 5,
+          })),
+        })
+        .expect(202);
+    }
+
+    /** Ida hasta `hasta` y vuelta al arco, muestreado cada `PASO_M`. */
+    function idaYVuelta(hasta: number): number[] {
+      const metros: number[] = [];
+      for (let m = 0; m <= hasta; m += PASO_M) metros.push(m);
+      for (let m = hasta - PASO_M; m >= 0; m -= PASO_M) metros.push(m);
+      return metros;
+    }
+
+    beforeAll(async () => {
+      const linea: [number, number][] = [];
+      for (let m = 0; m <= IDA_M; m += PASO_M) linea.push([0, comoLat(m)]);
+      for (let m = IDA_M - PASO_M; m >= 0; m -= PASO_M) linea.push([0, comoLat(m)]);
+
+      idaYVueltaId = (
+        await prisma.marathon.create({
+          data: {
+            slug: `${marca}-ida-vuelta`,
+            name: 'Ida y vuelta',
+            city: 'La Paz',
+            startsAt: new Date(Date.now() - 60 * 60 * 1000),
+            distanceMeters: 2 * IDA_M,
+            capacity: 100,
+            priceCents: 20_000,
+            publishedAt: new Date(),
+            routeGeoJson: { type: 'LineString', coordinates: linea },
+            liveStartedAt: new Date(Date.now() - 60 * 60 * 1000),
+          },
+        })
+      ).id;
+
+      inscripcionIdaYVuelta = (
+        await prisma.registration.create({
+          data: {
+            userId,
+            marathonId: idaYVueltaId,
+            status: 'confirmed',
+            step: 3,
+            bibNumber: 'IV-001',
+            totalCents: 20_000,
+            registeredAt: new Date(),
+          },
+        })
+      ).id;
+    });
+
+    afterAll(async () => {
+      await prisma.registration.deleteMany({ where: { marathonId: idaYVueltaId } });
+      await prisma.marathon.deleteMany({ where: { id: idaYVueltaId } });
+    });
+
+    it('quien hace el recorrido entero cruza la meta, y su carrera se cierra', async () => {
+      const socket = await espectador(idaYVueltaId);
+      const { sessionId, ingestToken } = await arrancar({
+        type: 'race',
+        registrationId: inscripcionIdaYVuelta,
+      });
+
+      const esperando = esperar<LlegadaEnVivo>(socket, 'runner:finish', 6000);
+      await correr(sessionId, ingestToken, idaYVuelta(IDA_M));
+
+      const llegada = await esperando;
+
+      expect(llegada).not.toBeNull();
+      expect(llegada!.bib).toBe('IV-001');
+      // Igual que en las posiciones: el dorsal y nada mas.
+      expect(Object.keys(llegada!).sort()).toEqual(['bib', 'distanceMeters', 't']);
+
+      // El servidor cierra la carrera el mismo, sin esperar al movil: puede
+      // estar en un bolsillo o sin bateria en el arco de meta.
+      const sesion = await prisma.trackingSession.findUnique({ where: { id: sessionId } });
+      expect(sesion!.finishDetectedAt).not.toBeNull();
+      expect(sesion!.status).toBe('finished');
+
+      // Y de ese cierre sale el resultado oficial, como con el boton.
+      const resultado = await prisma.raceResult.findUnique({
+        where: { registrationId: inscripcionIdaYVuelta },
+      });
+      expect(resultado).not.toBeNull();
+
+      await prisma.raceCheckpoint.deleteMany({ where: { raceResultId: resultado!.id } });
+      await prisma.raceResult.delete({ where: { id: resultado!.id } });
+    });
+
+    it('quien se da la vuelta antes de tiempo no llega', async () => {
+      const socket = await espectador(idaYVueltaId);
+      const { sessionId, ingestToken } = await arrancar({
+        type: 'race',
+        registrationId: inscripcionIdaYVuelta,
+      });
+
+      // 320 m corridos —mas de la mitad de los 600 del trazado— pero solo 160 de
+      // linea cubierta: la pierna de vuelta empieza en el metro 300.
+      const esperando = esperar<LlegadaEnVivo>(socket, 'runner:finish', 2500);
+      await correr(sessionId, ingestToken, idaYVuelta(160));
+
+      expect(await esperando).toBeNull();
+
+      const sesion = await prisma.trackingSession.findUnique({ where: { id: sessionId } });
+      expect(sesion!.finishDetectedAt).toBeNull();
+      expect(sesion!.status).toBe('active');
     });
   });
 });
