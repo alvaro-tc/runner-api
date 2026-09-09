@@ -558,41 +558,94 @@ export class AdminService {
   }
 
   /** Inscripciones, opcionalmente de una maraton o de un estado. */
-  async listarInscripciones(filtros: { marathonId?: string; status?: RegistrationStatus }) {
-    const registros = await this.prisma.registration.findMany({
-      where: {
-        deletedAt: null,
-        ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
-        ...(filtros.status ? { status: filtros.status } : {}),
-      },
-      orderBy: { createdAt: 'desc' },
-      take: 200,
-      include: {
-        user: { select: { email: true, name: true } },
-        marathon: { select: { slug: true, name: true } },
-        payments: { orderBy: { createdAt: 'desc' }, take: 1 },
-      },
-    });
+  async listarInscripciones(filtros: {
+    marathonId?: string;
+    status?: RegistrationStatus;
+    search?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const pagina = filtros.page ?? 1;
+    const porPagina = filtros.limit ?? 40;
 
-    return registros.map((r) => ({
-      id: r.id,
-      marathon: r.marathon.name,
-      runner: dato(r.personalData, 'fullName') || r.user.name,
-      email: r.user.email ?? null,
-      bibNumber: r.bibNumber,
-      status: r.status,
-      totalCents: r.totalCents,
-      payment: r.payments[0]
-        ? { id: r.payments[0].id, method: r.payments[0].method, status: r.payments[0].status }
-        : null,
-      createdAt: r.createdAt.toISOString(),
-    }));
+    const where: Prisma.RegistrationWhereInput = {
+      deletedAt: null,
+      ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
+      ...(filtros.status ? { status: filtros.status } : {}),
+      ...(filtros.search
+        ? {
+            OR: [
+              { user: { email: { contains: filtros.search, mode: 'insensitive' } } },
+              { user: { name: { contains: filtros.search, mode: 'insensitive' } } },
+              {
+                personalData: {
+                  path: ['fullName'],
+                  string_contains: filtros.search,
+                },
+              },
+              {
+                personalData: {
+                  path: ['docId'],
+                  string_contains: filtros.search,
+                },
+              },
+              {
+                personalData: {
+                  path: ['phone'],
+                  string_contains: filtros.search,
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+
+    const [total, registros] = await Promise.all([
+      this.prisma.registration.count({ where }),
+      this.prisma.registration.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (pagina - 1) * porPagina,
+        take: porPagina,
+        include: {
+          user: { select: { email: true, name: true } },
+          marathon: { select: { slug: true, name: true } },
+          payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+        },
+      }),
+    ]);
+
+    return {
+      data: registros.map((r) => ({
+        id: r.id,
+        marathon: r.marathon.name,
+        runner: dato(r.personalData, 'fullName') || r.user.name,
+        docId: dato(r.personalData, 'docId'),
+        phone: dato(r.personalData, 'phone'),
+        knowsCam: datoBooleano(r.personalData, 'knowsCam'),
+        acceptsDonorCall: datoBooleano(r.personalData, 'acceptsDonorCall'),
+        email: r.user.email ?? null,
+        bibNumber: r.bibNumber,
+        status: r.status,
+        totalCents: r.totalCents,
+        payment: r.payments[0]
+          ? { id: r.payments[0].id, method: r.payments[0].method, status: r.payments[0].status }
+          : null,
+        createdAt: r.createdAt.toISOString(),
+      })),
+      meta: {
+        total,
+        page: pagina,
+        limit: porPagina,
+        totalPages: Math.ceil(total / porPagina),
+      },
+    };
   }
 
   /** Pagos pendientes de confirmar a mano: la bandeja de trabajo del admin. */
   async listarTransferenciasPendientes() {
     const pagos = await this.prisma.payment.findMany({
-      where: { status: PaymentStatus.pending, method: 'bank_transfer' },
+      where: { status: PaymentStatus.pending },
       orderBy: { createdAt: 'asc' },
       include: {
         registration: {
@@ -613,6 +666,8 @@ export class AdminService {
       createdAt: p.createdAt.toISOString(),
       marathon: p.registration.marathon.name,
       runner: dato(p.registration.personalData, 'fullName') || p.registration.user.name,
+      docId: dato(p.registration.personalData, 'docId'),
+      phone: dato(p.registration.personalData, 'phone'),
       email: p.registration.user.email ?? null,
     }));
   }
@@ -1382,6 +1437,14 @@ function siNo(personalData: unknown, campo: string): string {
   }
 
   return '';
+}
+
+function datoBooleano(personalData: unknown, campo: string): boolean | null {
+  if (personalData && typeof personalData === 'object' && !Array.isArray(personalData)) {
+    const valor = (personalData as Record<string, unknown>)[campo];
+    if (typeof valor === 'boolean') return valor;
+  }
+  return null;
 }
 
 function dato(personalData: unknown, campo: string): string {
