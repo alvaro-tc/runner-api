@@ -52,6 +52,41 @@ paths:
       summary: Inicia sesion en un dispositivo
       tags:
         - auth
+  /api/v1/auth/google:
+    post:
+      description: >-
+        Recibe el ID token del SDK nativo de Google. Si el correo verificado ya tiene cuenta, entra
+        en ella; si no, la crea. Devuelve el mismo par de tokens que /auth/login.
+      operationId: AuthController_google
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GoogleLoginDto'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponseDto'
+        '401':
+          description: INVALID_CREDENTIALS
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '503':
+          description: 'SERVICE_UNAVAILABLE: falta GOOGLE_WEB_CLIENT_ID en el entorno'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      summary: Entra con Google; crea la cuenta si el correo no tenia una
+      tags:
+        - auth
   /api/v1/auth/refresh:
     post:
       description: >-
@@ -392,16 +427,30 @@ paths:
   /api/v1/users/me/data:
     delete:
       description: >-
-        Irreversible y sin papelera. Cancela primero las inscripciones a carreras que todavia no
-        ocurrieron —para que el cupo vuelva al organizador— y despues borra en cascada perfil,
-        entrenamientos, posiciones GPS, planes, sesiones y archivos subidos. Las sesiones se van con
-        el usuario, asi que no hay refresh posible; el access token que ya estuviera en la calle
-        caduca solo en 15 minutos y mientras tanto no resuelve a nadie.
+        Pide la contrasena para confirmar que es el dueno quien lo pide; las cuentas que entraron
+        con Google no tienen ninguna y la omiten (`hasPassword: false` en /auth/me). Irreversible y
+        sin papelera. Cancela primero las inscripciones a carreras que todavia no ocurrieron —para
+        que el cupo vuelva al organizador— y despues borra en cascada perfil, entrenamientos,
+        posiciones GPS, planes, sesiones y archivos subidos. Las sesiones se van con el usuario, asi
+        que no hay refresh posible; el access token que ya estuviera en la calle caduca solo en 15
+        minutos y mientras tanto no resuelve a nadie.
       operationId: UsersController_deleteAccount
       parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeleteAccountDto'
       responses:
         '200':
           description: La cuenta ya no existe
+        '401':
+          description: 'INVALID_CREDENTIALS: falta la contrasena o no es correcta'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
       security:
         - access-token: []
       summary: Borra la cuenta y todos sus datos
@@ -2316,8 +2365,10 @@ paths:
     get:
       description: >-
         Un punto por peticion, parametros en la query string. Se identifica con el `uniqueId` del
-        dispositivo (`id`) y necesita que ese dispositivo tenga una sesion de tracking abierta.
-        `timestamp` acepta unix en segundos, en milisegundos o ISO-8601.
+        dispositivo (`id`) y necesita que ese dispositivo tenga una sesion de tracking abierta, o
+        una inscripcion confirmada en una maraton en preparacion: en ese caso el punto se publica a
+        los espectadores y no se guarda (`accepted: 0`). `timestamp` acepta unix en segundos, en
+        milisegundos o ISO-8601.
       operationId: TrackingController_osmandIngest
       parameters: []
       responses:
@@ -2328,7 +2379,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/IngestResultDto'
         '409':
-          description: 'SESSION_NOT_ACTIVE: el dispositivo no tiene ninguna sesion abierta'
+          description: 'SESSION_NOT_ACTIVE: el dispositivo no tiene sesion abierta ni carrera preparando'
           content:
             application/json:
               schema:
@@ -3008,6 +3059,55 @@ paths:
       summary: Sacarla del catálogo
       tags:
         - admin
+  /api/v1/admin/marathons/{id}/prepare:
+    post:
+      description: >-
+        La antesala de la largada. **Bloquea la app de cada inscrito**: quien tenga inscripción
+        confirmada en esta carrera deja de poder hacer nada más que leer el aviso, hasta que se dé
+        la largada o se cancele la preparación. El `message` es opcional; sin él la app pinta su
+        texto por defecto en el idioma del corredor. Llamarlo otra vez solo con el mensaje corrige
+        el aviso sin tocar el estado.
+      operationId: AdminController_preparar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PrepareMarathonDto'
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Poner la maratón "en preparación"
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/cancel-preparation:
+    post:
+      description: >-
+        La marcha atrás: los inscritos recuperan la app. El texto del aviso se conserva para la
+        próxima vez.
+      operationId: AdminController_cancelarPreparacion
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Sacarla de preparación
+      tags:
+        - admin
   /api/v1/admin/marathons/{id}/start:
     post:
       description: >-
@@ -3147,17 +3247,78 @@ paths:
               - cancelled
               - refunded
             type: string
+        - name: search
+          required: false
+          in: query
+          description: Busca por nombre, CI, celular o email
+          schema:
+            type: string
+        - name: page
+          required: false
+          in: query
+          description: Pagina, default 1
+          schema:
+            type: string
+        - name: limit
+          required: false
+          in: query
+          description: Registros por pagina, default 40, max 100
+          schema:
+            type: string
       responses:
         '200':
           description: ''
       security:
         - access-token: []
-      summary: Últimas inscripciones, filtrables
+      summary: Inscripciones con busqueda y paginacion
+      tags:
+        - admin
+  /api/v1/admin/payments:
+    get:
+      description: >-
+        Una sola lista para los dos métodos que se validan a mano. Cada fila trae `validatedBy`
+        —**el nombre de quien lo dio por pagado**— y, si el cobro fue por QR, el `proofId` que hay
+        que aprobar o rechazar; sin él, lo que aplica es confirmar la transferencia.
+      operationId: AdminController_listarPagos
+      parameters:
+        - name: marathonId
+          required: false
+          in: query
+          schema:
+            type: string
+        - name: status
+          required: false
+          in: query
+          schema:
+            enum:
+              - pending
+              - paid
+              - failed
+              - refunded
+            type: string
+        - name: page
+          required: false
+          in: query
+          schema:
+            type: string
+        - name: pageSize
+          required: false
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: 'Los tickets: cobros de las maratones, con comprobante y auditoría'
       tags:
         - admin
   /api/v1/admin/payments/pending-transfers:
     get:
-      description: 'La bandeja de trabajo del admin: quién pagó por banco y falta darle el visto.'
+      description: >-
+        La bandeja de trabajo del admin: quién pagó por banco o por QR manual y falta darle el
+        visto. Solo los métodos que `confirm-transfer` acepta — una tarjeta rechazada no está.
       operationId: AdminController_transferenciasPendientes
       parameters: []
       responses:
@@ -3165,14 +3326,15 @@ paths:
           description: ''
       security:
         - access-token: []
-      summary: Transferencias esperando confirmación manual
+      summary: Cobros esperando confirmación manual
       tags:
         - admin
   /api/v1/admin/payments/{id}/confirm-transfer:
     post:
       description: >-
         Toma el cupo y emite el dorsal en la misma transacción que un cobro normal: no hay una
-        segunda forma de acreditar un pago. Solo aplica a `bank_transfer` y solo si sigue `pending`.
+        segunda forma de acreditar un pago. Solo aplica a `bank_transfer` y `qr_manual` —los dos
+        métodos que esperan a una persona— y solo si sigue `pending`.
       operationId: AdminController_confirmarTransferencia
       parameters:
         - name: id
@@ -3196,6 +3358,39 @@ paths:
       security:
         - access-token: []
       summary: Dar por cobrada una transferencia bancaria
+      tags:
+        - admin
+  /api/v1/admin/payments/{id}/refund:
+    post:
+      description: >-
+        Devolver **es** anular: quien recupera su dinero no corre, así que el cupo vuelve al pozo y
+        el stock de los adicionales también, por el mismo camino que un reembolso del proveedor.
+        Solo sobre un cobro `paid`, y es idempotente. Fuera de tarjeta no hay proveedor a quien
+        pedírselo: el dinero lo devuelve una persona por el mismo canal por el que entró, y lo que
+        queda aquí es el asiento de quién lo ordenó y por qué.
+      operationId: AdminController_reembolsar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundPaymentDto'
+      responses:
+        '409':
+          description: PAYMENT_ALREADY_SETTLED
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Devolver un cobro y anular la inscripción
       tags:
         - admin
   /api/v1/admin/marathons/{id}/results:
@@ -3251,15 +3446,43 @@ paths:
     get:
       description: >-
         Ni hash de contraseña, ni tokens, ni ubicaciones: lo que no hace falta aquí no se consulta,
-        y así no puede filtrarse por un descuido.
+        y así no puede filtrarse por un descuido. Paginado por `page`/`pageSize` —el total va en
+        `meta.total`— y filtrable por `role`. `q` busca en email, CI, nombre y el celular que dejó
+        en una inscripción. A un `organizer` se le devuelven **solo corredores**, pida el rol que
+        pida: es el mismo techo que le impide editar a un admin, aplicado también a mirar.
       operationId: AdminController_listarUsuarios
       parameters:
         - name: q
           required: false
           in: query
-          description: Busca por email o nombre
+          description: Coincidencia parcial en email, CI, nombre o celular de inscripcion
+          schema:
+            example: '76543210'
+            type: string
+        - name: role
+          required: false
+          in: query
+          description: Sin esto, vienen los tres roles
           schema:
             type: string
+            enum:
+              - runner
+              - organizer
+              - admin
+        - name: page
+          required: false
+          in: query
+          schema:
+            minimum: 1
+            default: 1
+            type: number
+        - name: pageSize
+          required: false
+          in: query
+          schema:
+            maximum: 100
+            default: 20
+            type: number
       responses:
         '200':
           description: ''
@@ -3593,10 +3816,23 @@ components:
         name:
           type: string
           example: Alvaro Quispe
+          description: >-
+            Opcional. Si no viene, se usa la parte local del email (o la CI) como nombre
+            provisional: el alta solo pide credenciales y el nombre real se pone en el perfil.
+        birthDate:
+          type: string
+          example: '1995-04-17'
+          description: Fecha ISO. Va al perfil.
+        gender:
+          type: string
+          enum:
+            - male
+            - female
+            - other
+            - unspecified
       required:
         - deviceId
         - password
-        - name
     AuthUserDto:
       type: object
       properties:
@@ -3617,6 +3853,7 @@ components:
           type: string
           enum:
             - runner
+            - organizer
             - admin
         mustChangePassword:
           type: boolean
@@ -3627,6 +3864,11 @@ components:
           type: object
           nullable: true
           description: Null = el usuario aun no vio el onboarding. Sobrevive a reinstalaciones.
+        hasPassword:
+          type: boolean
+          description: >-
+            False en las cuentas que entraron con Google y nunca pusieron contrasena. La app no debe
+            ofrecerles "cambiar contrasena": no hay una actual que pedir.
       required:
         - id
         - email
@@ -3635,6 +3877,7 @@ components:
         - role
         - mustChangePassword
         - onboardingSeenAt
+        - hasPassword
     AuthSessionResponseDto:
       type: object
       properties:
@@ -3687,6 +3930,13 @@ components:
           type: object
           nullable: true
           description: Cursor de la pagina siguiente
+        total:
+          type: number
+          description: Filas que cumplen el filtro, no las de esta pagina
+        page:
+          type: number
+        pageSize:
+          type: number
       required:
         - requestId
         - timestamp
@@ -3723,6 +3973,24 @@ components:
         - deviceId
         - identifier
         - password
+    GoogleLoginDto:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          example: 9f1c8d2e-4b7a-4c11-9f3e-2a1b5c6d7e8f
+        deviceName:
+          type: string
+          example: Pixel 8 de Alvaro
+        platform:
+          type: string
+          example: android
+        idToken:
+          type: string
+          description: ID token de Google (JWT). Lo devuelve `google_sign_in` en la app.
+      required:
+        - deviceId
+        - idToken
     RefreshDto:
       type: object
       properties:
@@ -3861,6 +4129,10 @@ components:
         defaultBibNumber:
           type: object
           nullable: true
+        phone:
+          type: object
+          nullable: true
+          example: +591 70000000
       required:
         - avatarUrl
         - city
@@ -3870,6 +4142,7 @@ components:
         - weightGrams
         - heightCm
         - defaultBibNumber
+        - phone
     MeDto:
       type: object
       properties:
@@ -3890,6 +4163,7 @@ components:
           type: string
           enum:
             - runner
+            - organizer
             - admin
         mustChangePassword:
           type: boolean
@@ -3921,6 +4195,14 @@ components:
           type: string
           example: runner@test.com
           description: 'Cambiarlo pone `emailVerifiedAt` en null: el nuevo buzon no esta verificado.'
+        ci:
+          type: string
+          example: 1234567 LP
+          description: 'Cedula de identidad. Se guarda normalizada y es unica: es credencial de acceso.'
+        phone:
+          type: object
+          example: +591 70000000
+          nullable: true
         city:
           type: object
           example: La Paz
@@ -4082,6 +4364,14 @@ components:
           type: object
           example: alta
           nullable: true
+    DeleteAccountDto:
+      type: object
+      properties:
+        password:
+          type: string
+          description: >-
+            Obligatoria si la cuenta tiene contrasena (`hasPassword: true` en /auth/me). Las cuentas
+            de Google la omiten.
     LongestWorkoutDto:
       type: object
       properties:
@@ -4548,6 +4838,13 @@ components:
           type: object
           nullable: true
           description: TEMPORAL — instrucciones junto al QR.
+        paymentQrPayload:
+          type: object
+          nullable: true
+          example: 00020101021226...5802BO6304A1B2
+          description: >-
+            TEMPORAL — contenido del QR **como texto**, para que la app lo dibuje ella misma. `null`
+            = esta carrera no admite `qr_manual`. Ver `docs/pago-qr-manual.md`.
         registrationStatus:
           type: string
           enum:
@@ -4581,6 +4878,7 @@ components:
         - coverUrl
         - paymentQrUrl
         - paymentQrInstructions
+        - paymentQrPayload
         - registrationStatus
         - capacity
         - slotsTaken
@@ -4694,6 +4992,13 @@ components:
           type: object
           nullable: true
           description: TEMPORAL — instrucciones junto al QR.
+        paymentQrPayload:
+          type: object
+          nullable: true
+          example: 00020101021226...5802BO6304A1B2
+          description: >-
+            TEMPORAL — contenido del QR **como texto**, para que la app lo dibuje ella misma. `null`
+            = esta carrera no admite `qr_manual`. Ver `docs/pago-qr-manual.md`.
         registrationStatus:
           type: string
           enum:
@@ -4766,6 +5071,7 @@ components:
         - coverUrl
         - paymentQrUrl
         - paymentQrInstructions
+        - paymentQrPayload
         - registrationStatus
         - capacity
         - slotsTaken
@@ -6693,6 +6999,13 @@ components:
           type: object
           nullable: true
           description: TEMPORAL — instrucciones junto al QR.
+        paymentQrPayload:
+          type: object
+          nullable: true
+          example: 00020101021226...5802BO6304A1B2
+          description: >-
+            TEMPORAL — contenido del QR **como texto**, para que la app lo dibuje ella misma. `null`
+            = esta carrera no admite `qr_manual`. Ver `docs/pago-qr-manual.md`.
         registrationStatus:
           type: string
           enum:
@@ -6737,6 +7050,7 @@ components:
         - coverUrl
         - paymentQrUrl
         - paymentQrInstructions
+        - paymentQrPayload
         - registrationStatus
         - capacity
         - slotsTaken
@@ -7177,6 +7491,15 @@ components:
           nullable: true
           example: Escanea con tu banca movil y pon la glosa que aparece abajo.
           description: TEMPORAL — texto que se pinta junto al QR.
+        paymentQrPayload:
+          type: object
+          nullable: true
+          example: 00020101021226580014BR.GOV.BCB.PIX...6304A1B2
+          description: >-
+            TEMPORAL — contenido del QR de cobro **como texto** (el string que devuelve la banca
+            movil al exportar el QR, un deep link o un numero de cuenta). La app lo dibuja: pesa
+            bytes en vez de KB y sale nitido a cualquier tamano. **Sin esto la carrera no admite
+            `qr_manual`.**
         schedule:
           example:
             - time: '06:00'
@@ -7294,6 +7617,15 @@ components:
           nullable: true
           example: Escanea con tu banca movil y pon la glosa que aparece abajo.
           description: TEMPORAL — texto que se pinta junto al QR.
+        paymentQrPayload:
+          type: object
+          nullable: true
+          example: 00020101021226580014BR.GOV.BCB.PIX...6304A1B2
+          description: >-
+            TEMPORAL — contenido del QR de cobro **como texto** (el string que devuelve la banca
+            movil al exportar el QR, un deep link o un numero de cuenta). La app lo dibuja: pesa
+            bytes en vez de KB y sale nitido a cualquier tamano. **Sin esto la carrera no admite
+            `qr_manual`.**
         schedule:
           example:
             - time: '06:00'
@@ -7416,6 +7748,14 @@ components:
           type: object
           nullable: true
           description: Null = sin límite, no agotado
+    PrepareMarathonDto:
+      type: object
+      properties:
+        message:
+          type: object
+          example: Concentracion en el arco a las 06:45. No cierres la app.
+          nullable: true
+          maxLength: 500
     ConfirmTransferDto:
       type: object
       properties:
@@ -7423,6 +7763,14 @@ components:
           type: string
           example: BNB-88213
           description: Referencia del comprobante bancario. Queda en `methodDetails`
+    RefundPaymentDto:
+      type: object
+      properties:
+        reason:
+          type: string
+          example: La carrera se suspendio por lluvia
+      required:
+        - reason
     RaceResultRowDto:
       type: object
       properties:
@@ -7494,6 +7842,7 @@ components:
           type: string
           enum:
             - runner
+            - organizer
             - admin
           default: runner
         verified:
@@ -7520,6 +7869,7 @@ components:
           type: string
           enum:
             - runner
+            - organizer
             - admin
         verified:
           type: boolean

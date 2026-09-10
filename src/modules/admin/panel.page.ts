@@ -938,7 +938,7 @@ async function vistaComprobantes() {
 // ─── Inscripciones ───────────────────────────────────────────────────────────
 
 async function vistaInscripciones() {
-  const registros = await api('/admin/registrations');
+  const registros = (await api('/admin/registrations')).data;
 
   $('#view').innerHTML = '<h2>Últimas inscripciones</h2>' + tabla(
     ['Corredor', 'Maratón', 'Dorsal', 'Estado', 'Total', 'Pago', 'Fecha'],

@@ -21,6 +21,7 @@ import { RoutesService } from '../routes/routes.service';
 import { LiveService } from '../realtime/live.service';
 import {
   MarathonRegistrationStatus,
+  PaymentMethod,
   PaymentStatus,
   RegistrationStatus,
   ServiceFeeScope,
@@ -662,32 +663,7 @@ export class AdminService {
       deletedAt: null,
       ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
       ...(filtros.status ? { status: filtros.status } : {}),
-      ...(filtros.search
-        ? {
-            OR: [
-              { user: { email: { contains: filtros.search, mode: 'insensitive' } } },
-              { user: { name: { contains: filtros.search, mode: 'insensitive' } } },
-              {
-                personalData: {
-                  path: ['fullName'],
-                  string_contains: filtros.search,
-                },
-              },
-              {
-                personalData: {
-                  path: ['docId'],
-                  string_contains: filtros.search,
-                },
-              },
-              {
-                personalData: {
-                  path: ['phone'],
-                  string_contains: filtros.search,
-                },
-              },
-            ],
-          }
-        : {}),
+      ...(filtros.search ? { OR: buscarInscripcion(filtros.search) } : {}),
     };
 
     const [total, registros] = await Promise.all([
@@ -847,10 +823,19 @@ export class AdminService {
     return new Paginated(filas, null, total, page, pageSize);
   }
 
-  /** Pagos pendientes de confirmar a mano: la bandeja de trabajo del admin. */
+  /**
+   * Pagos pendientes de confirmar a mano: la bandeja de trabajo del admin.
+   *
+   * La lista de metodos es **la misma** que acepta `acreditarManualmente()`: si
+   * apareciera aqui una tarjeta rechazada, el boton de confirmar devolveria 400
+   * y la bandeja mentiria. Una tarjeta no se arregla declarandola pagada.
+   */
   async listarTransferenciasPendientes() {
     const pagos = await this.prisma.payment.findMany({
-      where: { status: PaymentStatus.pending },
+      where: {
+        status: PaymentStatus.pending,
+        method: { in: [PaymentMethod.bank_transfer, PaymentMethod.qr_manual] },
+      },
       orderBy: { createdAt: 'asc' },
       include: {
         registration: {
@@ -1681,6 +1666,32 @@ function siNo(personalData: unknown, campo: string): string {
   }
 
   return '';
+}
+
+/**
+ * Las ramas del buscador de inscripciones.
+ *
+ * `personalData` es jsonb libre y ahi viven el nombre del formulario, la CI y
+ * el celular; las columnas `user.*` son el respaldo de quien se inscribio con
+ * cuenta. `mode: 'insensitive'` va tambien en los filtros de JSON —Postgres lo
+ * soporta— porque nadie escribe "Perez" con la mayuscula donde el formulario la
+ * guardo.
+ */
+export function buscarInscripcion(termino: string): Prisma.RegistrationWhereInput[] {
+  const texto = { contains: termino, mode: Prisma.QueryMode.insensitive };
+
+  return [
+    { user: { email: texto } },
+    { user: { name: texto } },
+    { user: { ci: texto } },
+    ...['fullName', 'docId', 'phone'].map((campo) => ({
+      personalData: {
+        path: [campo],
+        string_contains: termino,
+        mode: Prisma.QueryMode.insensitive,
+      },
+    })),
+  ];
 }
 
 function datoBooleano(personalData: unknown, campo: string): boolean | null {

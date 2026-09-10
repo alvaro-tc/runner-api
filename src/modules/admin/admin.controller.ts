@@ -583,8 +583,10 @@ export class AdminController {
   @Get('payments/pending-transfers')
   @Roles('admin', 'organizer')
   @ApiOperation({
-    summary: 'Transferencias esperando confirmación manual',
-    description: 'La bandeja de trabajo del admin: quién pagó por banco y falta darle el visto.',
+    summary: 'Cobros esperando confirmación manual',
+    description:
+      'La bandeja de trabajo del admin: quién pagó por banco o por QR manual y falta darle el ' +
+      'visto. Solo los métodos que `confirm-transfer` acepta — una tarjeta rechazada no está.',
   })
   transferenciasPendientes() {
     return this.admin.listarTransferenciasPendientes();
@@ -597,8 +599,8 @@ export class AdminController {
     summary: 'Dar por cobrada una transferencia bancaria',
     description:
       'Toma el cupo y emite el dorsal en la misma transacción que un cobro normal: no hay una ' +
-      'segunda forma de acreditar un pago. Solo aplica a `bank_transfer` y solo si sigue ' +
-      '`pending`.',
+      'segunda forma de acreditar un pago. Solo aplica a `bank_transfer` y `qr_manual` —los dos ' +
+      'métodos que esperan a una persona— y solo si sigue `pending`.',
   })
   @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'PAYMENT_ALREADY_SETTLED' })
   confirmarTransferencia(
