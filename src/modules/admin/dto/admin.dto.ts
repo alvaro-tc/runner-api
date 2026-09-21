@@ -205,6 +205,15 @@ export class AdminActionResultDto {
 // ─── Alta y edición de maratones ───────────────────────────────────────────
 
 /**
+ * Tope de vueltas de un circuito.
+ *
+ * No hay carrera de mas de cien vueltas al mismo trazado; un numero mayor es un
+ * dedazo, y aceptarlo dejaria una maraton de 3.000 km que ningun corredor puede
+ * acabar y que descuadra el pronostico de todo el que la mire.
+ */
+export const MAX_VUELTAS = 100;
+
+/**
  * Los campos de una maraton, todos opcionales.
  *
  * El alta y la edicion comparten esta clase y se diferencian solo en lo que
@@ -278,11 +287,31 @@ export class MarathonFieldsDto {
   @Max(180)
   lng?: number | null;
 
-  @ApiPropertyOptional({ example: 42195, description: 'Metros' })
+  @ApiPropertyOptional({
+    example: 42195,
+    description:
+      'Metros de **una vuelta** (con `laps: 1`, que es lo normal, es la carrera entera). El ' +
+      'total que corre el inscrito lo calcula la API: `distanceMeters * laps`, y es lo que ' +
+      'devuelve en `distanceMeters`.',
+  })
   @IsOptional()
   @IsInt()
   @Min(1)
   distanceMeters?: number;
+
+  @ApiPropertyOptional({
+    example: 5,
+    default: 1,
+    description:
+      'Vueltas al circuito. 1 = punto a punto o ida y vuelta. Mayor que 1 = **circuito**: el ' +
+      'recorrido cargado es *una* vuelta y el corredor la repite; la llegada se detecta al ' +
+      'cerrar la ultima, no la primera.',
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(MAX_VUELTAS)
+  laps?: number;
 
   @ApiPropertyOptional({ example: 2000, description: 'Cupos totales' })
   @IsOptional()
@@ -433,8 +462,9 @@ export class CreateMarathonDto extends MarathonFieldsDto {
   @ApiPropertyOptional({
     example: 42195,
     description:
-      'Metros. Opcional **solo** si se manda `routeId`: en ese caso la distancia se mide sobre ' +
-      'la geometría del recorrido, que es la que dibuja el mapa. Sin recorrido es obligatorio.',
+      'Metros de una vuelta. Opcional **solo** si se manda `routeId`: en ese caso la distancia ' +
+      'se mide sobre la geometría del recorrido, que es la que dibuja el mapa. Sin recorrido es ' +
+      'obligatorio.',
   })
   @IsOptional()
   @IsInt()

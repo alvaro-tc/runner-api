@@ -25,8 +25,10 @@ export interface EstadoCorredor {
   ultimoPunto: PuntoLive | null;
   /** Cuando se toco por ultima vez, para poder podar lo abandonado. */
   ultimoUsoMs: number;
-  /** Metros de **trazado oficial** cubiertos. Ver `course.ts`. */
+  /** Metros de **trazado oficial** cubiertos en la vuelta en curso. Ver `course.ts`. */
   progresoM: number;
+  /** Vueltas al circuito ya cerradas. 0 en toda carrera de una sola vuelta. */
+  vueltas: number;
   /** Ya se le dio por llegado. Se mira para no detectar la meta dos veces. */
   terminado: boolean;
 }
@@ -40,6 +42,7 @@ export function nuevoEstado(marathonId: string, bib: string | null): EstadoCorre
     ultimoPunto: null,
     ultimoUsoMs: Date.now(),
     progresoM: 0,
+    vueltas: 0,
     terminado: false,
   };
 }
@@ -120,6 +123,8 @@ export interface PosicionEnVivo {
   lat: number;
   lng: number;
   distanceMeters: number;
+  /** Vuelta que va corriendo, empezando en 1. Siempre 1 si el circuito no da vueltas. */
+  lap: number;
   /** Instante del punto, ISO-8601 UTC. Corto a proposito: `t`, no `recordedAt`. */
   t: string;
 }
@@ -130,6 +135,7 @@ export function aPayload(estado: EstadoCorredor, punto: PuntoLive): PosicionEnVi
     lat: redondear(punto.lat),
     lng: redondear(punto.lng),
     distanceMeters: Math.round(estado.distanceMeters),
+    lap: estado.vueltas + 1,
     t: punto.recordedAt.toISOString(),
   };
 }

@@ -26,6 +26,7 @@ const CAMPOS_RESUMEN = {
   city: true,
   country: true,
   distanceMeters: true,
+  laps: true,
   priceCents: true,
   currency: true,
   coverUrl: true,
@@ -255,7 +256,12 @@ export class MarathonsService {
       timezone: maraton.timezone,
       city: maraton.city,
       country: maraton.country,
+      // El total que se corre. En un circuito sale de repetir el trazado, y por
+      // eso viajan tambien las vueltas: sin ellas el corredor ve un mapa de 2 km
+      // junto a una carrera de 10 y cree que el mapa esta mal.
       distanceMeters: maraton.distanceMeters,
+      laps: maraton.laps,
+      lapDistanceMeters: maraton.distanceMeters / maraton.laps,
       priceCents: maraton.priceCents,
       currency: maraton.currency,
       // El afiche es lo que la app pinta en Home; sale siempre como URL

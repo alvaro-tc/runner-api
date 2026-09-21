@@ -122,10 +122,64 @@ export function avanzar(recorrido: Recorrido, progresoM: number, punto: Coordena
   return Math.max(progresoM, mejorProgreso);
 }
 
-/** Si con este progreso y este punto el corredor ya cruzo la meta. */
-export function haLlegado(recorrido: Recorrido, progresoM: number, punto: Coordenada): boolean {
+/**
+ * Si con este progreso y este punto el corredor acaba de cerrar **una vuelta**.
+ *
+ * En una carrera de una sola vuelta —lo normal— cerrar la vuelta es llegar a
+ * meta, y esto es exactamente lo de siempre. En un circuito es un paso mas por
+ * el arco: quien decide si era el ultimo es `avanceEnCircuito`.
+ */
+export function haCerradoVuelta(
+  recorrido: Recorrido,
+  progresoM: number,
+  punto: Coordenada,
+): boolean {
   if (progresoM < recorrido.total - MARGEN_META_M) return false;
   return metros(punto, recorrido.puntos[recorrido.puntos.length - 1]!) <= RADIO_META_M;
+}
+
+/** Donde va un corredor de circuito: vueltas cerradas y metros de la actual. */
+export interface AvanceEnCircuito {
+  /** Vueltas completas. Con `laps` vueltas cerradas, la carrera acabo. */
+  vueltas: number;
+  /** Metros de trazado cubiertos **en la vuelta en curso**. */
+  progresoM: number;
+  llego: boolean;
+}
+
+/**
+ * Mueve al corredor por el circuito con este lote de puntos.
+ *
+ * Un circuito es el mismo `LineString` repetido: el progreso se mide sobre una
+ * vuelta y al cerrarla vuelve a cero, porque el corredor esta otra vez al
+ * principio de la misma linea. Sin este reseteo `avanzar` no tendria trazado
+ * por delante que cubrir y todo el pelotón se quedaria clavado al final de la
+ * primera vuelta —que es, ademas, donde la carrera se daria por terminada—.
+ *
+ * Es el unico sitio donde las vueltas existen: el resto del seguimiento no
+ * sabe si la linea se repite, igual que no sabe si es una ida y vuelta.
+ */
+export function avanceEnCircuito(
+  recorrido: Recorrido,
+  estado: { vueltas: number; progresoM: number },
+  puntos: readonly Coordenada[],
+  laps: number,
+): AvanceEnCircuito {
+  let { vueltas, progresoM } = estado;
+
+  for (const punto of puntos) {
+    progresoM = avanzar(recorrido, progresoM, punto);
+    if (!haCerradoVuelta(recorrido, progresoM, punto)) continue;
+
+    vueltas += 1;
+    if (vueltas >= laps) return { vueltas, progresoM, llego: true };
+
+    // Arco cruzado y quedan vueltas: el corredor esta fisicamente en la salida
+    // otra vez, asi que su progreso tambien.
+    progresoM = 0;
+  }
+
+  return { vueltas, progresoM, llego: false };
 }
 
 // ─── Internos ──────────────────────────────────────────────────────────────

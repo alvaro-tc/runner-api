@@ -485,7 +485,8 @@ async function vistaEditorMaraton(id) {
         '<span class="muted">al elegir uno, la distancia y el trazado salen de él</span>' +
       '</div>' +
       '<div class="row">' +
-        campo('distanceMeters', 'Distancia (m)', v(m?.distanceMeters), 'type="number" min="1" style="width:130px"') +
+        campo('distanceMeters', 'Distancia por vuelta (m)', v(m?.lapDistanceMeters), 'type="number" min="1" style="width:170px"') +
+        campo('laps', 'Vueltas', v(m?.laps) || '1', 'type="number" min="1" max="100" style="width:90px"') +
         campo('capacity', 'Cupos *', v(m?.capacity), 'type="number" min="1" required style="width:110px"') +
         campo('priceCents', 'Precio (centavos) *', v(m?.priceCents), 'type="number" min="0" required style="width:150px"') +
         campo('currency', 'Moneda', v(m?.currency) || 'BOB', 'maxlength="3" style="width:80px"') +
@@ -494,6 +495,10 @@ async function vistaEditorMaraton(id) {
           '<option value="true"' + (m?.published ? ' selected' : '') + '>sí</option>' +
         '</select></label>' +
       '</div>' +
+      // Circuito: el trazado es UNA vuelta y el corredor la repite. El total se
+      // pinta aqui, debajo de los dos campos, porque es la unica forma de que
+      // nadie cargue 5 km de circuito creyendo que ya son los 25 de la carrera.
+      '<div class="row"><span class="muted" id="totalVueltas"></span></div>' +
       '<div class="row">' +
         campo(
           'paymentQrInstructions',
@@ -526,6 +531,17 @@ async function vistaEditorMaraton(id) {
     (m ? bloqueAfiche(m) + bloqueQr(m) : '') +
     (m ? bloqueCategorias(m) + bloqueExtras(m) : '<p class="muted">Las categorías y los adicionales se cargan una vez creada la maratón.</p>');
 
+  const pintarTotal = () => {
+    const porVuelta = Number($('#distanceMeters').value) || 0;
+    const vueltas = Number($('#laps').value) || 1;
+    $('#totalVueltas').textContent = vueltas > 1
+      ? vueltas + ' vueltas al trazado · ' + ((porVuelta * vueltas) / 1000).toFixed(2) + ' km en total'
+      : 'Una sola vuelta: el trazado es la carrera entera.';
+  };
+  $('#distanceMeters').addEventListener('input', pintarTotal);
+  $('#laps').addEventListener('input', pintarTotal);
+  pintarTotal();
+
   $('#marForm').addEventListener('submit', async (ev) => {
     ev.preventDefault();
 
@@ -543,7 +559,9 @@ async function vistaEditorMaraton(id) {
       country: texto('country') || undefined,
       lat: numero('lat'),
       lng: numero('lng'),
+      // Por vuelta: el total lo hace la API multiplicando por las vueltas.
       distanceMeters: numero('distanceMeters'),
+      laps: numero('laps') || 1,
       // Vacio = desvincular. La API distingue "no vino el campo" de "ponlo a
       // null", y aqui el select siempre viene: mandarlo siempre es lo correcto.
       routeId: $('#routeId').value || null,

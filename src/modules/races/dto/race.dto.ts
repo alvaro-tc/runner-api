@@ -44,8 +44,11 @@ export class RaceMarathonDto {
   @ApiProperty({ example: 'America/La_Paz', description: 'Zona IANA, para mostrar la hora local' })
   timezone!: string;
 
-  @ApiProperty({ example: 42195 })
+  @ApiProperty({ example: 42195, description: 'Total que se corre, vueltas incluidas' })
   distanceMeters!: number;
+
+  @ApiProperty({ example: 1, description: 'Vueltas al circuito. 1 = el trazado es la carrera entera.' })
+  laps!: number;
 
   @ApiProperty({ nullable: true })
   coverUrl!: string | null;

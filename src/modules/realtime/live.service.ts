@@ -13,7 +13,7 @@ import {
   type EstadoDeMaraton,
   type PuntoLive,
 } from './live-state';
-import { avanzar, haLlegado, prepararRecorrido, type Recorrido } from './course';
+import { avanceEnCircuito, prepararRecorrido, type Recorrido } from './course';
 import { RegistrationStatus } from '../../../generated/prisma/enums';
 
 /** Cuanto puede estar callada una sesion antes de que se tire su estado. */
@@ -78,6 +78,8 @@ const FRACCION_SIN_TRAZADO = 0.98;
 interface Curso {
   recorrido: Recorrido | null;
   distanceMeters: number;
+  /** Vueltas al trazado. 1 en casi todas; ver `avanceEnCircuito`. */
+  laps: number;
 }
 
 @Injectable()
@@ -179,13 +181,10 @@ export class LiveService {
     let llego = false;
 
     if (curso.recorrido) {
-      for (const punto of puntos) {
-        estado.progresoM = avanzar(curso.recorrido, estado.progresoM, punto);
-        if (haLlegado(curso.recorrido, estado.progresoM, punto)) {
-          llego = true;
-          break;
-        }
-      }
+      const avance = avanceEnCircuito(curso.recorrido, estado, puntos, curso.laps);
+      estado.vueltas = avance.vueltas;
+      estado.progresoM = avance.progresoM;
+      llego = avance.llego;
     } else {
       // Sin trazado cargado no hay ruta que comprobar: solo queda el
       // cuentakilometros del propio corredor.
@@ -220,12 +219,13 @@ export class LiveService {
 
     const maraton = await this.prisma.marathon.findUnique({
       where: { id: marathonId },
-      select: { routeGeoJson: true, distanceMeters: true },
+      select: { routeGeoJson: true, distanceMeters: true, laps: true },
     });
 
     const curso: Curso = {
       recorrido: prepararRecorrido(maraton?.routeGeoJson),
       distanceMeters: maraton?.distanceMeters ?? 0,
+      laps: maraton?.laps ?? 1,
     };
     this.cursos.set(marathonId, curso);
 

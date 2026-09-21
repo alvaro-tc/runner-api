@@ -535,9 +535,17 @@ export class AdminController {
   @Roles('admin', 'organizer')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: RegistrationStatus })
-  @ApiQuery({ name: 'search', required: false, description: 'Busca por nombre, CI, celular o email' })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    description: 'Busca por nombre, CI, celular o email',
+  })
   @ApiQuery({ name: 'page', required: false, description: 'Pagina, default 1' })
-  @ApiQuery({ name: 'limit', required: false, description: 'Registros por pagina, default 40, max 100' })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    description: 'Registros por pagina, default 40, max 100',
+  })
   @ApiOperation({ summary: 'Inscripciones con busqueda y paginacion' })
   listarInscripciones(
     @Query('marathonId') marathonId?: string,
@@ -548,7 +556,13 @@ export class AdminController {
   ) {
     const pagina = Math.max(1, parseInt(page || '1', 10));
     const porPagina = Math.min(100, Math.max(1, parseInt(limit || '40', 10)));
-    return this.admin.listarInscripciones({ marathonId, status, search, page: pagina, limit: porPagina });
+    return this.admin.listarInscripciones({
+      marathonId,
+      status,
+      search,
+      page: pagina,
+      limit: porPagina,
+    });
   }
 
   @Get('payments')

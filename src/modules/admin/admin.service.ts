@@ -630,6 +630,8 @@ export class AdminService {
       city: m.city,
       startsAt: m.startsAt.toISOString(),
       distanceMeters: m.distanceMeters,
+      laps: m.laps,
+      lapDistanceMeters: m.distanceMeters / m.laps,
       capacity: m.capacity,
       slotsTaken: m.slotsTaken,
       priceCents: m.priceCents,
@@ -948,15 +950,17 @@ export class AdminService {
     // Con recorrido, la distancia sale de la geometria y no del formulario: el
     // mapa es lo que el corredor va a seguir, y un "42195" escrito a mano junto
     // a un trazado de 38 km deja una carrera cuya meta no esta en el mapa.
-    const distanceMeters = heredado?.distanceMeters ?? dto.distanceMeters;
+    const porVuelta = heredado?.distanceMeters ?? dto.distanceMeters;
 
-    if (distanceMeters === undefined) {
+    if (porVuelta === undefined) {
       throw new AppException(
         ErrorCode.VALIDATION_ERROR,
         'Elegi un recorrido (`routeId`) o indica la distancia en metros',
         HttpStatus.BAD_REQUEST,
       );
     }
+
+    const laps = dto.laps ?? 1;
 
     const maraton = await this.prisma.marathon.create({
       data: {
@@ -968,7 +972,8 @@ export class AdminService {
         slug,
         startsAt: new Date(dto.startsAt),
         city: dto.city,
-        distanceMeters,
+        laps,
+        distanceMeters: porVuelta * laps,
         capacity: dto.capacity,
         priceCents: dto.priceCents,
         publishedAt: dto.published ? new Date() : null,
@@ -1007,6 +1012,10 @@ export class AdminService {
         // dejar la distancia vieja con el trazado nuevo es la incoherencia que
         // este bloque existe para impedir.
         ...(heredado ?? {}),
+        // Y detras de las dos, el total: `distanceMeters` en la base es lo que
+        // corre el inscrito, no lo que mide una vuelta. Tocar solo las vueltas
+        // —o solo el trazado— tiene que recalcularlo igual.
+        ...this.distanciaTotal(actual, dto, heredado?.distanceMeters),
         ...(dto.routeId === null ? { routeId: null } : {}),
         ...(slug ? { slug } : {}),
         // `published` es un booleano de cara al panel y una fecha en la base.
@@ -1172,7 +1181,11 @@ export class AdminService {
       country: maraton.country,
       lat: maraton.lat,
       lng: maraton.lng,
+      // El total que corre el inscrito, y las dos mitades de las que sale: el
+      // formulario edita vueltas y distancia por vuelta, no el producto.
       distanceMeters: maraton.distanceMeters,
+      laps: maraton.laps,
+      lapDistanceMeters: maraton.distanceMeters / maraton.laps,
       capacity: maraton.capacity,
       slotsTaken: maraton.slotsTaken,
       priceCents: maraton.priceCents,
@@ -1503,7 +1516,9 @@ export class AdminService {
       'country',
       'lat',
       'lng',
-      'distanceMeters',
+      // `distanceMeters` no: llega por vuelta y se guarda multiplicado. Lo
+      // resuelve `distanciaTotal`, que es quien conoce las dos mitades.
+      'laps',
       'capacity',
       'priceCents',
       'currency',
@@ -1545,6 +1560,26 @@ export class AdminService {
    * ya copiada donde esta. Borrarla tambien seria dejar la carrera sin mapa por
    * un cambio administrativo.
    */
+  /**
+   * El `distanceMeters` que toca escribir en una edicion, o nada si no cambia.
+   *
+   * La base guarda el **total** y el formulario habla de **una vuelta**, asi
+   * que el producto hay que rehacerlo cuando cambia cualquiera de los dos
+   * factores. La vuelta actual se recupera dividiendo —el total se escribe
+   * siempre como `porVuelta * laps`, con enteros, asi que la division es
+   * exacta— y por eso no hace falta una columna mas diciendo lo mismo.
+   */
+  private distanciaTotal(
+    actual: { distanceMeters: number; laps: number },
+    dto: UpdateMarathonDto,
+    deRecorrido: number | undefined,
+  ): { distanceMeters: number } {
+    const laps = dto.laps ?? actual.laps;
+    const porVuelta = deRecorrido ?? dto.distanceMeters ?? actual.distanceMeters / actual.laps;
+
+    return { distanceMeters: Math.round(porVuelta * laps) };
+  }
+
   private async heredarRecorrido(routeId: string | null | undefined) {
     if (!routeId) return null;
 

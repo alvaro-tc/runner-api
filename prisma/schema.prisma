@@ -438,10 +438,23 @@ model Marathon {
   lat     Float?
   lng     Float?
 
+  /// Distancia **total** que corre el inscrito: `lapDistanceMeters * laps`.
+  /// Es la que usan resultados, ritmos y predicciones; nadie fuera del alta
+  /// necesita saber que sale de dar vueltas.
   distanceMeters Int
-  capacity       Int
+
+  /// Vueltas al circuito. 1 = punto a punto o ida y vuelta, el caso normal.
+  ///
+  /// Mayor que 1 significa **circuito**: `routeGeoJson` es *una* vuelta y el
+  /// corredor la repite. Se guarda el numero y no la distancia por vuelta
+  /// porque `distanceMeters / laps` la devuelve exacta —el total se escribe
+  /// siempre como producto de enteros— y dos columnas que dicen lo mismo se
+  /// desincronizan.
+  laps Int @default(1)
+
+  capacity   Int
   /// Se incrementa dentro de la transaccion del pago, con SELECT ... FOR UPDATE.
-  slotsTaken     Int @default(0)
+  slotsTaken Int @default(0)
 
   priceCents Int
   currency   String @default("BOB")

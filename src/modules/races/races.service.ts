@@ -30,6 +30,7 @@ const MARATON_DE_LA_CARRERA = {
   startsAt: true,
   timezone: true,
   distanceMeters: true,
+  laps: true,
   coverUrl: true,
   kitPickup: true,
   preparingAt: true,

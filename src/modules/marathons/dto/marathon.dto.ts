@@ -98,8 +98,19 @@ export class MarathonSummaryDto {
   @ApiProperty({ example: 'BO' })
   country!: string;
 
-  @ApiProperty({ example: 42195, description: 'Metros' })
+  @ApiProperty({ example: 42195, description: 'Metros. El **total** que corre el inscrito' })
   distanceMeters!: number;
+
+  @ApiProperty({
+    example: 5,
+    description:
+      'Vueltas al circuito. 1 = el recorrido se hace una vez. Mayor que 1 = `routeGeoJson` es ' +
+      '*una* vuelta y hay que repetirla.',
+  })
+  laps!: number;
+
+  @ApiProperty({ example: 8439, description: 'Metros de una vuelta: `distanceMeters / laps`' })
+  lapDistanceMeters!: number;
 
   @ApiProperty({ example: 25000, description: 'Centavos' })
   priceCents!: number;

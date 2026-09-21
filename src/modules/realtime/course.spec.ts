@@ -1,4 +1,10 @@
-import { avanzar, haLlegado, prepararRecorrido, type Recorrido } from './course';
+import {
+  avanzar,
+  haCerradoVuelta,
+  avanceEnCircuito,
+  prepararRecorrido,
+  type Recorrido,
+} from './course';
 
 /** Metros por grado, los mismos que usa el modulo. */
 const M_POR_GRADO = 111_320;
@@ -84,7 +90,7 @@ describe('ida y vuelta', () => {
       p = avanzar(r, p, enMetro(metro));
     }
     expect(p).toBeLessThan(1000);
-    expect(haLlegado(r, p, enMetro(0))).toBe(false);
+    expect(haCerradoVuelta(r, p, enMetro(0))).toBe(false);
   });
 
   it('quien hace el recorrido entero llega', () => {
@@ -93,11 +99,76 @@ describe('ida y vuelta', () => {
     for (let metro = 900; metro >= 0; metro -= 100) p = avanzar(r, p, enMetro(metro));
 
     expect(p).toBeCloseTo(2000, -1);
-    expect(haLlegado(r, p, enMetro(0))).toBe(true);
+    expect(haCerradoVuelta(r, p, enMetro(0))).toBe(true);
   });
 
   it('estar junto a la meta no basta: cuenta el trazado cubierto', () => {
     // El corredor sigue en el arco de salida, que es tambien el de meta.
-    expect(haLlegado(r, 50, enMetro(0))).toBe(false);
+    expect(haCerradoVuelta(r, 50, enMetro(0))).toBe(false);
+  });
+});
+
+describe('avanceEnCircuito', () => {
+  // Un circuito de 1 km: ida de 500 m y vuelta al mismo arco. Salida y meta
+  // son el mismo punto, que es lo que hace dificil contar las vueltas.
+  const r = prepararOFallar(idaYVuelta(500));
+
+  /** El corredor da una vuelta entera, punto a punto cada 100 m. */
+  const unaVuelta = () => [
+    ...[100, 200, 300, 400, 500].map((m) => enMetro(m)),
+    ...[400, 300, 200, 100, 0].map((m) => enMetro(m)),
+  ];
+
+  it('con una sola vuelta se comporta como siempre', () => {
+    const avance = avanceEnCircuito(r, { vueltas: 0, progresoM: 0 }, unaVuelta(), 1);
+    expect(avance.llego).toBe(true);
+    expect(avance.vueltas).toBe(1);
+  });
+
+  it('cerrar la primera vuelta de un circuito no es llegar', () => {
+    const avance = avanceEnCircuito(r, { vueltas: 0, progresoM: 0 }, unaVuelta(), 5);
+    expect(avance.llego).toBe(false);
+    expect(avance.vueltas).toBe(1);
+    // Y el progreso vuelve a cero: si no, no quedaria linea por delante que
+    // cubrir y el corredor se quedaria clavado en la vuelta 1 para siempre.
+    expect(avance.progresoM).toBe(0);
+  });
+
+  it('llega al cerrar la ultima vuelta, y no antes', () => {
+    let estado = { vueltas: 0, progresoM: 0 };
+
+    for (let vuelta = 1; vuelta <= 4; vuelta += 1) {
+      const avance = avanceEnCircuito(r, estado, unaVuelta(), 5);
+      expect(avance.llego).toBe(false);
+      expect(avance.vueltas).toBe(vuelta);
+      estado = { vueltas: avance.vueltas, progresoM: avance.progresoM };
+    }
+
+    const ultima = avanceEnCircuito(r, estado, unaVuelta(), 5);
+    expect(ultima.llego).toBe(true);
+    expect(ultima.vueltas).toBe(5);
+  });
+
+  it('cuenta varias vueltas dentro de un mismo lote', () => {
+    const avance = avanceEnCircuito(
+      r,
+      { vueltas: 0, progresoM: 0 },
+      [...unaVuelta(), ...unaVuelta()],
+      5,
+    );
+    expect(avance.vueltas).toBe(2);
+    expect(avance.llego).toBe(false);
+  });
+
+  it('quien se queda a mitad de vuelta no suma ninguna', () => {
+    const avance = avanceEnCircuito(
+      r,
+      { vueltas: 2, progresoM: 0 },
+      [200, 400, 500].map((m) => enMetro(m)),
+      5,
+    );
+    expect(avance.vueltas).toBe(2);
+    expect(avance.progresoM).toBeGreaterThan(400);
+    expect(avance.llego).toBe(false);
   });
 });

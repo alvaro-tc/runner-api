@@ -99,7 +99,14 @@ describe('aPayload', () => {
 
     const payload = aPayload(estado, ultimo);
 
-    expect(Object.keys(payload).sort()).toEqual(['bib', 'distanceMeters', 'lat', 'lng', 't']);
+    expect(Object.keys(payload).sort()).toEqual([
+      'bib',
+      'distanceMeters',
+      'lap',
+      'lat',
+      'lng',
+      't',
+    ]);
     expect(payload.bib).toBe('A-042');
     expect(payload.t).toBe(ultimo.recordedAt.toISOString());
     expect(payload.distanceMeters).toBe(100);
