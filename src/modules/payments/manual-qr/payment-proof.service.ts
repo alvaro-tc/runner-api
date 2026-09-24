@@ -14,6 +14,7 @@ import {
 import type { PaymentProof } from '../../../../generated/prisma/client';
 import { PaymentsService } from '../payments.service';
 import { LiveService } from '../../realtime/live.service';
+import { NotificationsService } from '../../notifications/notifications.service';
 
 /**
  * Formatos que sabemos decodificar. Todo sale convertido a WebP igual.
@@ -71,6 +72,7 @@ export class PaymentProofService {
     // Rechazar no cambia la inscripcion —el cobro sigue pendiente—, asi que el
     // aviso hay que darlo desde aqui: nadie mas lo va a dar.
     private readonly live: LiveService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -138,6 +140,8 @@ export class PaymentProofService {
     });
 
     this.logger.log(`Comprobante ${comprobante.id} subido para el cobro ${paymentId}`);
+
+    await this.avisarAlEquipo(comprobante.id, paymentId);
 
     return this.toDto(comprobante);
   }
@@ -273,10 +277,25 @@ export class PaymentProofService {
 
     const pago = await this.prisma.payment.findUnique({
       where: { id: comprobante.paymentId },
-      select: { registrationId: true },
+      select: {
+        registrationId: true,
+        registration: { select: { userId: true, marathon: { select: { id: true, name: true } } } },
+      },
     });
 
-    if (pago) await this.live.anunciarInscripcion(pago.registrationId);
+    if (pago) {
+      await this.live.anunciarInscripcion(pago.registrationId);
+      // El motivo es obligatorio justo para esto: el corredor tiene que saber
+      // que foto subir la proxima vez.
+      await this.notifications.notify(pago.registration.userId, {
+        type: 'payment.rejected',
+        paymentId: comprobante.paymentId,
+        registrationId: pago.registrationId,
+        marathonId: pago.registration.marathon.id,
+        marathonName: pago.registration.marathon.name,
+        reason: motivo.trim(),
+      });
+    }
 
     return this.toDto(await this.buscar(proofId));
   }
@@ -284,6 +303,37 @@ export class PaymentProofService {
   // ---------------------------------------------------------------------------
   //  Internos
   // ---------------------------------------------------------------------------
+
+  /** Llega por la app y por la web publica: los dos caminos pasan por `subir`. */
+  private async avisarAlEquipo(proofId: string, paymentId: string): Promise<void> {
+    const pago = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      select: {
+        amountCents: true,
+        currency: true,
+        registration: {
+          select: {
+            id: true,
+            user: { select: { name: true } },
+            marathon: { select: { id: true, name: true } },
+          },
+        },
+      },
+    });
+    if (!pago) return;
+
+    await this.notifications.notifyStaff({
+      type: 'payment.proof_submitted',
+      proofId,
+      paymentId,
+      registrationId: pago.registration.id,
+      marathonId: pago.registration.marathon.id,
+      marathonName: pago.registration.marathon.name,
+      runnerName: pago.registration.user.name,
+      amountCents: pago.amountCents,
+      currency: pago.currency,
+    });
+  }
 
   private async buscar(proofId: string): Promise<PaymentProof> {
     const fila = await this.prisma.paymentProof.findUnique({ where: { id: proofId } });

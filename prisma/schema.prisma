@@ -221,6 +221,7 @@ model User {
   proofsReviewed      PaymentProof[]       @relation("ProofReviewedBy")
   paymentsConfirmed   Payment[]            @relation("PaymentConfirmedBy")
   paymentsRefunded    Payment[]            @relation("PaymentRefundedBy")
+  notifications       Notification[]
 
   @@index([role])
   @@map("users")
@@ -371,6 +372,29 @@ model Device {
 
   @@index([userId])
   @@map("devices")
+}
+
+/// Bandeja de avisos in-app. Es el registro: el push, si sale, es solo el
+/// timbre. Se guarda siempre —aunque el usuario apague los push— porque el
+/// icono de la campana tiene que poder contar lo que no leyo.
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// `payment.proof_submitted`, `payment.approved`… El catalogo vive en
+  /// `NotificationsService`; aqui es texto para no migrar por cada evento.
+  type  String
+  title String
+  body  String
+  /// Lo que la app necesita para navegar al tocarla (`registrationId`…).
+  data  Json   @default("{}")
+
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@map("notifications")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

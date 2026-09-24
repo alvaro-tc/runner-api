@@ -16,6 +16,7 @@ import { ReceiptService, type LineaDeComprobante } from './receipt/receipt.servi
 import { StorageService } from '../storage/storage.service';
 import { glosaDe, intentoDeQrManual } from './manual-qr/qr-intent';
 import { PaymentProofService } from './manual-qr/payment-proof.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 /**
  * Orquesta el paso 3: cobra y, si el cobro pasa, confirma la inscripcion.
@@ -47,7 +48,29 @@ export class PaymentsService {
     @Inject(forwardRef(() => PaymentProofService))
     private readonly proofs: PaymentProofService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
+    private readonly notifications: NotificationsService,
   ) {}
+
+  /**
+   * Solo para lo que valida una persona: con tarjeta el corredor ve el
+   * resultado en pantalla, con QR o transferencia se entera por aqui.
+   */
+  private async avisarPagoValidado(paymentId: string, registrationId: string): Promise<void> {
+    const registro = await this.prisma.registration.findUnique({
+      where: { id: registrationId },
+      select: { userId: true, bibNumber: true, marathon: { select: { id: true, name: true } } },
+    });
+    if (!registro) return;
+
+    await this.notifications.notify(registro.userId, {
+      type: 'payment.approved',
+      paymentId,
+      registrationId,
+      marathonId: registro.marathon.id,
+      marathonName: registro.marathon.name,
+      bibNumber: registro.bibNumber,
+    });
+  }
 
   async checkout(userId: string, registrationId: string, dto: CheckoutDto, idempotencyKey: string) {
     exigirClaveDeIdempotencia(idempotencyKey);
@@ -731,7 +754,10 @@ export class PaymentsService {
       },
     });
 
-    if (count === 1) await this.registrations.confirmarPago(pago.registrationId);
+    if (count === 1) {
+      await this.registrations.confirmarPago(pago.registrationId);
+      await this.avisarPagoValidado(pago.id, pago.registrationId);
+    }
 
     this.logger.log(`Transferencia ${pago.id} confirmada a mano por ${adminUserId}`);
 

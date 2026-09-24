@@ -263,6 +263,11 @@ export class LiveService {
     this.cursos.delete(estado.marathonId);
   }
 
+  /** Empuja una notificacion recien guardada a la sala personal del usuario. */
+  anunciarNotificacion(userId: string, notificacion: object): void {
+    this.gateway.emitirNotificacion(userId, notificacion);
+  }
+
   /**
    * Avisa al dueño de una inscripcion de que algo cambio en ella.
    *

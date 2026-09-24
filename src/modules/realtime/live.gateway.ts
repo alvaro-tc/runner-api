@@ -200,6 +200,16 @@ export class LiveGateway implements OnGatewayConnection {
   }
 
   /**
+   * Una notificacion nueva en la bandeja de este usuario. Aqui si viaja entera:
+   * ya esta guardada, no hay otra version que pueda llegar desordenada, y la
+   * app la necesita para pintar el aviso sin otra ida y vuelta.
+   */
+  emitirNotificacion(userId: string, notificacion: object): void {
+    if (!this.server) return;
+    this.server.to(salaDeUsuario(userId)).emit('notification:new', notificacion);
+  }
+
+  /**
    * Avisa de que un corredor cruzo la meta.
    *
    * Va por la misma sala que las posiciones y con la misma regla: solo el

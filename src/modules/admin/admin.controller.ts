@@ -606,6 +606,19 @@ export class AdminController {
     return this.admin.listarTransferenciasPendientes();
   }
 
+  // Despues de `pending-transfers`: declarado antes, `:id` se lo tragaria.
+  @Get('payments/:id')
+  @Roles('admin', 'organizer')
+  @ApiOperation({
+    summary: 'Un ticket por id',
+    description:
+      'La misma fila que `GET /admin/payments`. La usa la app para abrir la ficha desde un ' +
+      'aviso sin buscar el cobro en la cola.',
+  })
+  pago(@Param('id') id: string) {
+    return this.admin.pago(id);
+  }
+
   @Post('payments/:id/confirm-transfer')
   @Roles('admin', 'organizer')
   @HttpCode(HttpStatus.OK)

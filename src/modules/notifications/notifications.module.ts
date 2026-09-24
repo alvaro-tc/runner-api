@@ -1,4 +1,6 @@
 import { Global, Module } from '@nestjs/common';
+import { RealtimeModule } from '../realtime/realtime.module';
+import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { ConsolePushSender, PushSender } from './push.sender';
 
@@ -8,6 +10,8 @@ import { ConsolePushSender, PushSender } from './push.sender';
  */
 @Global()
 @Module({
+  imports: [RealtimeModule],
+  controllers: [NotificationsController],
   providers: [NotificationsService, { provide: PushSender, useClass: ConsolePushSender }],
   exports: [NotificationsService],
 })

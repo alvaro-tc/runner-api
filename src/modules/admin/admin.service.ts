@@ -137,6 +137,31 @@ function aUsuarioPublico(u: UsuarioSeleccionado) {
   };
 }
 
+/** Lo que hace falta de un cobro para pintarlo como ticket. */
+const INCLUDE_TICKET = {
+  confirmedBy: { select: { id: true, name: true } },
+  refundedBy: { select: { id: true, name: true } },
+  // El ultimo comprobante: si el corredor subio uno, lo rechazaron y
+  // subio otro, el que se revisa es el nuevo.
+  proofs: {
+    orderBy: { createdAt: 'desc' },
+    take: 1,
+    include: { reviewedBy: { select: { id: true, name: true } } },
+  },
+  registration: {
+    select: {
+      id: true,
+      bibNumber: true,
+      status: true,
+      personalData: true,
+      marathon: { select: { id: true, name: true } },
+      user: { select: { id: true, name: true, email: true, ci: true } },
+    },
+  },
+} satisfies Prisma.PaymentInclude;
+
+type TicketConRelaciones = Prisma.PaymentGetPayload<{ include: typeof INCLUDE_TICKET }>;
+
 /**
  * Operaciones de administracion.
  *
@@ -752,77 +777,74 @@ export class AdminService {
         orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
         skip: (page - 1) * pageSize,
         take: pageSize,
-        include: {
-          confirmedBy: { select: { id: true, name: true } },
-          refundedBy: { select: { id: true, name: true } },
-          // El ultimo comprobante: si el corredor subio uno, lo rechazaron y
-          // subio otro, el que se revisa es el nuevo.
-          proofs: {
-            orderBy: { createdAt: 'desc' },
-            take: 1,
-            include: { reviewedBy: { select: { id: true, name: true } } },
-          },
-          registration: {
-            select: {
-              id: true,
-              bibNumber: true,
-              status: true,
-              personalData: true,
-              marathon: { select: { id: true, name: true } },
-              user: { select: { id: true, name: true, email: true, ci: true } },
-            },
-          },
-        },
+        include: INCLUDE_TICKET,
       }),
     ]);
 
-    const filas = pagos.map((p) => {
-      const comprobante = p.proofs[0];
-      const revisor = p.confirmedBy ?? comprobante?.reviewedBy ?? null;
-
-      return {
-        id: p.id,
-        method: p.method,
-        status: p.status,
-        amountCents: p.amountCents,
-        currency: p.currency,
-        createdAt: p.createdAt.toISOString(),
-        paidAt: p.paidAt?.toISOString() ?? null,
-        refundedAt: p.refundedAt?.toISOString() ?? null,
-        // El motivo de la devolucion vive donde ya lo escriben el webhook y la
-        // cancelacion; un segundo campo para lo mismo seria un segundo sitio
-        // donde mirar.
-        refundReason: p.status === PaymentStatus.refunded ? p.failureReason : null,
-        refundedBy: p.refundedBy?.name ?? null,
-
-        registrationId: p.registrationId,
-        registrationStatus: p.registration.status,
-        bibNumber: p.registration.bibNumber,
-        marathonId: p.registration.marathon.id,
-        marathon: p.registration.marathon.name,
-        runner: dato(p.registration.personalData, 'fullName') || p.registration.user.name,
-        runnerEmail: p.registration.user.email ?? null,
-        runnerCi: p.registration.user.ci ?? null,
-        runnerPhone: dato(p.registration.personalData, 'phone') || null,
-
-        // El comprobante, si lo hay. `proofId` es lo que la app necesita para
-        // aprobar o rechazar; sin el, el boton que aplica es el de confirmar
-        // la transferencia.
-        proofId: comprobante?.status === 'in_review' ? comprobante.id : null,
-        proofStatus: comprobante?.status ?? null,
-        proofImageUrl: comprobante ? this.storage.url(comprobante.imageKey) : null,
-        proofReference: comprobante?.reference ?? null,
-        proofNote: comprobante?.note ?? null,
-
-        /// Quien lo valido. **El dato de auditoria**: un pago acreditado sin
-        /// nombre detras no se puede revisar.
-        validatedById: revisor?.id ?? null,
-        validatedBy: revisor?.name ?? null,
-        validatedAt: (p.paidAt ?? comprobante?.reviewedAt)?.toISOString() ?? null,
-      };
-    });
+    const filas = pagos.map((p) => this.aTicket(p));
 
     return new Paginated(filas, null, total, page, pageSize);
+  }
+
+  /**
+   * Un ticket suelto, con la misma forma que una fila de [listarPagos]. Es lo
+   * que abre la ficha al tocar un aviso de pago sin buscarlo en la cola.
+   */
+  async pago(id: string) {
+    const p = await this.prisma.payment.findFirst({
+      where: { id, registration: { deletedAt: null } },
+      include: INCLUDE_TICKET,
+    });
+    if (!p) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'No se encontro ese cobro', HttpStatus.NOT_FOUND);
+    }
+    return this.aTicket(p);
+  }
+
+  private aTicket(p: TicketConRelaciones) {
+    const comprobante = p.proofs[0];
+    const revisor = p.confirmedBy ?? comprobante?.reviewedBy ?? null;
+
+    return {
+      id: p.id,
+      method: p.method,
+      status: p.status,
+      amountCents: p.amountCents,
+      currency: p.currency,
+      createdAt: p.createdAt.toISOString(),
+      paidAt: p.paidAt?.toISOString() ?? null,
+      refundedAt: p.refundedAt?.toISOString() ?? null,
+      // El motivo de la devolucion vive donde ya lo escriben el webhook y la
+      // cancelacion; un segundo campo para lo mismo seria un segundo sitio
+      // donde mirar.
+      refundReason: p.status === PaymentStatus.refunded ? p.failureReason : null,
+      refundedBy: p.refundedBy?.name ?? null,
+
+      registrationId: p.registrationId,
+      registrationStatus: p.registration.status,
+      bibNumber: p.registration.bibNumber,
+      marathonId: p.registration.marathon.id,
+      marathon: p.registration.marathon.name,
+      runner: dato(p.registration.personalData, 'fullName') || p.registration.user.name,
+      runnerEmail: p.registration.user.email ?? null,
+      runnerCi: p.registration.user.ci ?? null,
+      runnerPhone: dato(p.registration.personalData, 'phone') || null,
+
+      // El comprobante, si lo hay. `proofId` es lo que la app necesita para
+      // aprobar o rechazar; sin el, el boton que aplica es el de confirmar
+      // la transferencia.
+      proofId: comprobante?.status === 'in_review' ? comprobante.id : null,
+      proofStatus: comprobante?.status ?? null,
+      proofImageUrl: comprobante ? this.storage.url(comprobante.imageKey) : null,
+      proofReference: comprobante?.reference ?? null,
+      proofNote: comprobante?.note ?? null,
+
+      /// Quien lo valido. **El dato de auditoria**: un pago acreditado sin
+      /// nombre detras no se puede revisar.
+      validatedById: revisor?.id ?? null,
+      validatedBy: revisor?.name ?? null,
+      validatedAt: (p.paidAt ?? comprobante?.reviewedAt)?.toISOString() ?? null,
+    };
   }
 
   /**
