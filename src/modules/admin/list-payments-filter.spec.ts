@@ -3,7 +3,9 @@ import { AdminService } from './admin.service';
 /** El buscador de la cola de cobros del organizador. */
 describe('listado de cobros del panel', () => {
   const count = jest.fn().mockResolvedValue(0);
-  const findMany = jest.fn().mockResolvedValue([]);
+  const findMany = jest
+    .fn<Promise<unknown[]>, [{ where: Record<string, unknown> }]>()
+    .mockResolvedValue([]);
   const admin = Object.assign(Object.create(AdminService.prototype) as object, {
     prisma: {
       payment: { count, findMany },
@@ -13,7 +15,7 @@ describe('listado de cobros del panel', () => {
 
   beforeEach(() => findMany.mockClear());
 
-  const where = () => (findMany.mock.calls[0][0] as { where: Record<string, unknown> }).where;
+  const where = () => findMany.mock.lastCall![0].where;
 
   it('sin busqueda no mete un OR', async () => {
     await admin.listarPagos({ marathonId: 'm1', q: '   ' });
