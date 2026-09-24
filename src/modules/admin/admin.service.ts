@@ -752,19 +752,35 @@ export class AdminService {
   async listarPagos(filtros: {
     marathonId?: string;
     status?: PaymentStatus;
+    q?: string;
     page?: number;
     pageSize?: number;
   }) {
     const pageSize = filtros.pageSize ?? 20;
     const page = filtros.page ?? 1;
+    const q = filtros.q?.trim();
 
     const where: Prisma.PaymentWhereInput = {
       ...(filtros.status ? { status: filtros.status } : {}),
-      ...(filtros.marathonId ? { registration: { marathonId: filtros.marathonId } } : {}),
       registration: {
         deletedAt: null,
         ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
       },
+      // Lo que se tiene delante al validar: el nombre o la CI de quien dice
+      // haber pagado, su dorsal, o el numero de transaccion del extracto.
+      ...(q
+        ? {
+            OR: [
+              { registration: { OR: buscarInscripcion(q) } },
+              { registration: { bibNumber: { contains: q, mode: Prisma.QueryMode.insensitive } } },
+              {
+                proofs: {
+                  some: { reference: { contains: q, mode: Prisma.QueryMode.insensitive } },
+                },
+              },
+            ],
+          }
+        : {}),
     };
 
     const [total, pagos] = await this.prisma.$transaction([

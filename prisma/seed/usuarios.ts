@@ -31,7 +31,7 @@ interface SemillaUsuario {
   preferencias: { locale: string; notifications: Record<string, boolean> };
 }
 
-const USUARIOS: SemillaUsuario[] = [
+export const USUARIOS: SemillaUsuario[] = [
   {
     email: 'runner@test.com',
     ci: '6789012LP',

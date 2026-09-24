@@ -739,7 +739,7 @@ PUT    /admin/extras/:extraId
 DELETE /admin/extras/:extraId
 
 GET    /admin/registrations?marathonId=&status=&search=&page=&limit=  ← `{ data, meta }`; `search` busca nombre, CI, celular y email
-GET    /admin/payments?marathonId=&status=&page=&pageSize=  ← admin | organizer · los tickets, con `validatedBy`
+GET    /admin/payments?marathonId=&status=&q=&page=&pageSize=  ← admin | organizer · los tickets, con `validatedBy`; `q` busca nombre, CI, celular, email, dorsal o nº de transacción
 GET    /admin/payments/pending-transfers           ← `bank_transfer` y `qr_manual` en `pending`
 POST   /admin/payments/:id/confirm-transfer
 POST   /admin/payments/:id/refund                   ← admin | organizer · devuelve y anula la inscripción

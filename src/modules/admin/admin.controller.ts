@@ -569,6 +569,11 @@ export class AdminController {
   @Roles('admin', 'organizer')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
+  @ApiQuery({
+    name: 'q',
+    required: false,
+    description: 'Busca por nombre, CI, celular, email, dorsal o número de transacción',
+  })
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'pageSize', required: false })
   @ApiOperation({
@@ -581,12 +586,14 @@ export class AdminController {
   listarPagos(
     @Query('marathonId') marathonId?: string,
     @Query('status') status?: PaymentStatus,
+    @Query('q') q?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
     return this.admin.listarPagos({
       marathonId,
       status,
+      q,
       page: Number(page) || 1,
       // Techo duro: el tamaño de página lo escribe el cliente y sin límite una
       // sola llamada se lleva la tabla de dinero entera.
