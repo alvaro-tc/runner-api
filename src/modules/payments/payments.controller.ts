@@ -131,9 +131,9 @@ export class PaymentsController {
   @ApiOperation({
     summary: 'Comprobante de pago en PDF',
     description:
-      'Devuelve la URL del PDF, en espanol y con los montos en Bs. Se genera la primera vez y ' +
-      'se reutiliza: sale de los datos congelados de la inscripcion, asi que regenerarlo daria ' +
-      'siempre lo mismo. **No es una factura**: no esta dosificado y no da credito fiscal.',
+      'Devuelve la URL del recibo de donación emitido al confirmar el pago. Usa la plantilla ' +
+      'original del CAM y el importe efectivamente cobrado. Si la emisión estaba pendiente, ' +
+      'se reintenta al consultar. **No es una factura**.',
   })
   @ApiResponse({ status: 200, type: ReceiptDto })
   @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'NOT_FOUND' })

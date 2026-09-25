@@ -411,6 +411,23 @@ describe('Races (e2e)', () => {
       expect((res.body as ErrorBody).error.code).toBe('RECEIPT_NOT_AVAILABLE');
     });
 
+    it('descarga el PDF propio sin sobre JSON', async () => {
+      const registrationId = await inscribir(userId, 'F-PDF');
+      const res = await http()
+        .get(`/api/v1/races/${registrationId}/receipt/pdf`)
+        .set(auth())
+        .expect(200)
+        .expect('Content-Type', /application\/pdf/);
+      expect(res.headers['cache-control']).toBe('private, no-store');
+      expect(Buffer.isBuffer(res.body)).toBe(true);
+      expect((res.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+    });
+
+    it('no descarga PDF sin pago', async () => {
+      const registrationId = await inscribir(userId, 'F-NOPDF', { pagada: false });
+      await http().get(`/api/v1/races/${registrationId}/receipt/pdf`).set(auth()).expect(409);
+    });
+
     it('devuelve el comprobante del pago cobrado', async () => {
       const registrationId = await inscribir(userId, 'F-004');
 
