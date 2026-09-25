@@ -760,7 +760,6 @@ export class AdminController {
   }
 
   @Delete('users/:id')
-  @Roles('admin', 'organizer')
   @ApiOperation({
     summary: 'Borrar una cuenta',
     description:
