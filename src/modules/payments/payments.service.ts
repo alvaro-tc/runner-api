@@ -12,7 +12,7 @@ import { PAYMENT_PROVIDER, type IntentoDePago, type PaymentProvider } from './pa
 import type { CheckoutDto } from './dto/payment.dto';
 import { EventoDeWebhook, type WebhookEventDto } from './dto/webhook.dto';
 import { ResultadoDeVerificacion, verificar } from './webhook/signature';
-import { ReceiptService, type LineaDeComprobante } from './receipt/receipt.service';
+import { ReceiptService, receiptKey, type LineaDeComprobante } from './receipt/receipt.service';
 import { StorageService } from '../storage/storage.service';
 import { glosaDe, intentoDeQrManual } from './manual-qr/qr-intent';
 import { PaymentProofService } from './manual-qr/payment-proof.service';
@@ -36,6 +36,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
+  private readonly recibosEnCurso = new Map<string, Promise<{ url: string }>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -526,14 +527,8 @@ export class PaymentsService {
   //  Comprobante
   // ─────────────────────────────────────────────────────────────────────────
 
-  /**
-   * URL del comprobante en PDF. Se genera la primera vez y se reutiliza.
-   *
-   * Se cachea en `receiptUrl` porque el documento no puede cambiar: sale de los
-   * datos congelados de la inscripcion, asi que regenerarlo daria siempre lo
-   * mismo y solo gastaria CPU y disco. Si el archivo se borrara, basta con
-   * vaciar la columna.
-   */
+  /** Recibo emitido al confirmar el pago. Las lecturas también recuperan una
+   * emisión pendiente o actualizan documentos de una plantilla anterior. */
   async comprobante(userId: string, paymentId: string): Promise<{ url: string }> {
     const pago = await this.buscarPropio(userId, paymentId);
 
@@ -545,8 +540,52 @@ export class PaymentsService {
       );
     }
 
-    if (pago.receiptUrl) return { url: pago.receiptUrl };
+    return this.emitirRecibo(pago);
+  }
 
+  async archivoDelRecibo(userId: string, paymentId: string): Promise<Buffer> {
+    await this.comprobante(userId, paymentId);
+    const key = receiptKey(paymentId);
+    try {
+      return await this.storage.read(key);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // Una URL persistida no garantiza que el archivo siga en disco.
+      const pago = await this.buscarPropio(userId, paymentId);
+      if (pago.status !== PaymentStatus.paid) {
+        throw new AppException(
+          ErrorCode.RECEIPT_NOT_AVAILABLE,
+          'Solo hay recibo de un pago cobrado',
+          HttpStatus.CONFLICT,
+        );
+      }
+      await this.emitirRecibo({ ...pago, receiptUrl: null });
+      return this.storage.read(key);
+    }
+  }
+
+  /** Emision inmediata y recuperable: fallar al guardar el PDF nunca revierte
+   * un pago validado. La URL nula permite reintentar tras reiniciar el proceso. */
+  async asegurarRecibo(paymentId: string): Promise<void> {
+    try {
+      const pago = await this.prisma.payment.findUniqueOrThrow({ where: { id: paymentId } });
+      if (pago.status === PaymentStatus.paid) await this.emitirRecibo(pago);
+    } catch (error) {
+      this.logger.error(`No se pudo emitir el recibo ${paymentId}; se reintentará`, error);
+    }
+  }
+
+  private emitirRecibo(pago: Payment): Promise<{ url: string }> {
+    if (pago.receiptUrl?.endsWith(receiptKey(pago.id)))
+      return Promise.resolve({ url: pago.receiptUrl });
+    const pendiente = this.recibosEnCurso.get(pago.id);
+    if (pendiente) return pendiente;
+    const emision = this.generarRecibo(pago).finally(() => this.recibosEnCurso.delete(pago.id));
+    this.recibosEnCurso.set(pago.id, emision);
+    return emision;
+  }
+
+  private async generarRecibo(pago: Payment): Promise<{ url: string }> {
     const registro = await this.prisma.registration.findUniqueOrThrow({
       where: { id: pago.registrationId },
       include: { marathon: true },
@@ -554,6 +593,7 @@ export class PaymentsService {
 
     const url = await this.receipts.generar({
       paymentId: pago.id,
+      currency: pago.currency,
       externalId: pago.externalId,
       paidAt: pago.paidAt ?? pago.createdAt,
       method: pago.method,
@@ -562,7 +602,7 @@ export class PaymentsService {
       subtotalCents: registro.subtotalCents,
       serviceFeeLabel: etiquetaDeFee(registro.serviceFeeSnapshot),
       serviceFeeCents: registro.serviceFeeCents,
-      totalCents: registro.totalCents,
+      totalCents: pago.amountCents,
       marathonName: registro.marathon.name,
       marathonCity: registro.marathon.city,
       marathonStartsAt: registro.marathon.startsAt,
@@ -605,6 +645,7 @@ export class PaymentsService {
   private async liquidar(pago: Payment) {
     try {
       const registration = await this.registrations.confirmarPago(pago.registrationId);
+      await this.asegurarRecibo(pago.id);
       return { payment: this.toDto(pago), registration };
     } catch (error) {
       await this.compensar(pago, error);
@@ -689,6 +730,7 @@ export class PaymentsService {
         await this.compensar(acreditado, error);
         return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
       }
+      await this.asegurarRecibo(acreditado.id);
     }
 
     return acreditado;
@@ -756,6 +798,7 @@ export class PaymentsService {
 
     if (count === 1) {
       await this.registrations.confirmarPago(pago.registrationId);
+      await this.asegurarRecibo(pago.id);
       await this.avisarPagoValidado(pago.id, pago.registrationId);
     }
 

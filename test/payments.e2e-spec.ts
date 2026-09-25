@@ -5,6 +5,8 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
+import { ReceiptService } from '../src/modules/payments/receipt/receipt.service';
+import { ReceiptRecoveryService } from '../src/modules/payments/receipt/receipt-recovery.service';
 import { PrismaService } from '../src/database/prisma.service';
 import { CABECERA_DE_FIRMA, firmar } from '../src/modules/payments/webhook/signature';
 
@@ -68,6 +70,8 @@ const DATOS = {
   fullName: 'Alvaro Quispe',
   docId: '1234567 LP',
   phone: '+591 70000000',
+  knowsCam: false,
+  acceptsDonorCall: false,
 };
 
 const tarjeta = (number: string) => ({
@@ -98,6 +102,7 @@ describe('Payments (e2e)', () => {
 
   let token = '';
   let tokenOtro = '';
+  let tokenOrganizador = '';
 
   let marathonId = '';
   let categoriaId = '';
@@ -176,6 +181,20 @@ describe('Payments (e2e)', () => {
 
     token = await registrarUsuario('uno');
     tokenOtro = await registrarUsuario('dos');
+    await registrarUsuario('organizador');
+    await prisma.user.update({
+      where: { email: `${marca}-organizador@test.com` },
+      data: { role: 'organizer' },
+    });
+    const login = await http()
+      .post('/api/v1/auth/login')
+      .send({
+        identifier: `${marca}-organizador@test.com`,
+        password: 'Test1234!',
+        deviceId: `${marca}-organizador`,
+      })
+      .expect(200);
+    tokenOrganizador = (login.body as Envelope<{ accessToken: string }>).data.accessToken;
 
     const maraton = await prisma.marathon.create({
       data: {
@@ -186,6 +205,7 @@ describe('Payments (e2e)', () => {
         distanceMeters: 42_195,
         capacity: 100,
         priceCents: 20_000,
+        paymentQrPayload: 'qr-de-prueba',
         publishedAt: new Date(),
         categories: { create: [{ name: 'General', extraPriceCents: 0 }] },
         extras: { create: [{ name: 'Transporte', priceCents: 3_000, stock: 2 }] },
@@ -997,6 +1017,73 @@ describe('Payments (e2e)', () => {
       return (res.body as Envelope<Checkout>).data.payment.id;
     }
 
+    it('aprobar el QR emite un recibo y solo su dueño puede descargarlo', async () => {
+      const regId = await borradorListo();
+      const abierto = await checkout(regId, { method: 'qr_manual', card: null }).expect(200);
+      const pagoId = (abierto.body as Envelope<Checkout>).data.payment.id;
+      const proof = await http()
+        .post(`/api/v1/payments/${pagoId}/proof`)
+        .set(auth())
+        .attach('file', resolve('src/modules/payments/receipt/assets/donaciones.jpeg'))
+        .expect(201);
+      const proofId = (proof.body as Envelope<{ id: string }>).data.id;
+      await http()
+        .post(`/api/v1/admin/payment-proofs/${proofId}/approve`)
+        .set(auth())
+        .send({})
+        .expect(403);
+      await http()
+        .post(`/api/v1/admin/payment-proofs/${proofId}/approve`)
+        .set(auth(tokenOrganizador))
+        .send({})
+        .expect(200);
+      const pago = await prisma.payment.findUniqueOrThrow({ where: { id: pagoId } });
+      expect(pago.status).toBe('paid');
+      expect(pago.receiptUrl).toMatch(/\.pdf$/);
+      const pdf = await http().get(`/api/v1/races/${regId}/receipt/pdf`).set(auth()).expect(200);
+      expect((pdf.body as Buffer).subarray(0, 5).toString()).toBe('%PDF-');
+      await http().get(`/api/v1/races/${regId}/receipt/pdf`).set(auth(tokenOtro)).expect(404);
+      await http().get(`/api/v1/races/${regId}/receipt/pdf`).expect(401);
+      await http()
+        .post(`/api/v1/admin/payment-proofs/${proofId}/approve`)
+        .set(auth(tokenOrganizador))
+        .send({})
+        .expect(409);
+    });
+
+    it('un fallo al emitir no revierte la validación y se recupera después', async () => {
+      const regId = await borradorListo();
+      const abierto = await checkout(regId, { method: 'bank_transfer', card: null }).expect(200);
+      const pagoId = (abierto.body as Envelope<Checkout>).data.payment.id;
+      const emitir = jest
+        .spyOn(app.get(ReceiptService), 'generar')
+        .mockRejectedValueOnce(new Error('Disco temporalmente inaccesible'));
+      try {
+        await http()
+          .post(`/api/v1/admin/payments/${pagoId}/confirm-transfer`)
+          .set(auth(tokenOrganizador))
+          .send({})
+          .expect(200);
+        const pago = await prisma.payment.findUniqueOrThrow({ where: { id: pagoId } });
+        expect(pago.status).toBe('paid');
+        expect(pago.receiptUrl).toBeNull();
+        const reg = await prisma.registration.findUniqueOrThrow({ where: { id: regId } });
+        expect(reg.status).toBe('confirmed');
+        await app.get(ReceiptRecoveryService).recover();
+        expect(
+          (await prisma.payment.findUniqueOrThrow({ where: { id: pagoId } })).receiptUrl,
+        ).toMatch(/\.pdf$/);
+      } finally {
+        emitir.mockRestore();
+      }
+    });
+
+    it('emite el recibo al validar sin que el corredor lo solicite', async () => {
+      const pagoId = await pagar();
+      const pago = await prisma.payment.findUniqueOrThrow({ where: { id: pagoId } });
+      expect(pago.receiptUrl).toMatch(/\.pdf$/);
+    });
+
     it('genera un PDF de verdad con los datos del pago', async () => {
       const pagoId = await pagar();
 
@@ -1012,6 +1099,21 @@ describe('Payments (e2e)', () => {
       // con la extension puesta a mano.
       expect(bytes.subarray(0, 4).toString()).toBe('%PDF');
       expect(bytes.byteLength).toBeGreaterThan(1_000);
+    });
+
+    it('dos descargas concurrentes recuperan un recibo faltante una sola vez', async () => {
+      const pagoId = await pagar();
+      await prisma.payment.update({ where: { id: pagoId }, data: { receiptUrl: null } });
+      const emitir = jest.spyOn(app.get(ReceiptService), 'generar');
+      try {
+        await Promise.all([
+          http().get(`/api/v1/payments/${pagoId}/receipt`).set(auth()).expect(200),
+          http().get(`/api/v1/payments/${pagoId}/receipt`).set(auth()).expect(200),
+        ]);
+        expect(emitir).toHaveBeenCalledTimes(1);
+      } finally {
+        emitir.mockRestore();
+      }
     });
 
     it('la segunda llamada devuelve la misma URL, sin regenerar', async () => {

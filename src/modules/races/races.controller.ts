@@ -1,4 +1,15 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
+import { SkipEnvelope } from '../../common/decorators/skip-envelope.decorator';
+import {
+  Controller,
+  Get,
+  Header,
+  StreamableFile,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -75,6 +86,21 @@ export class RacesController {
   })
   splits(@CurrentUser('sub') userId: string, @Param('registrationId') id: string) {
     return this.races.splits(userId, id);
+  }
+
+  @Get(':registrationId/receipt/pdf')
+  @SkipEnvelope()
+  @Header('Cache-Control', 'private, no-store')
+  @ApiOperation({ summary: 'Descargar el recibo PDF de una inscripción propia' })
+  @ApiResponse({
+    status: 200,
+    content: { 'application/pdf': { schema: { type: 'string', format: 'binary' } } },
+  })
+  async receiptFile(@CurrentUser('sub') userId: string, @Param('registrationId') id: string) {
+    return new StreamableFile(await this.races.archivoDelRecibo(userId, id), {
+      type: 'application/pdf',
+      disposition: 'attachment; filename="recibo.pdf"',
+    });
   }
 
   @Get(':registrationId/receipt')

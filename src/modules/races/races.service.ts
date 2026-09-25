@@ -187,6 +187,16 @@ export class RacesService {
    * documentos distintos para el mismo cobro.
    */
   async comprobante(userId: string, registrationId: string) {
+    const pago = await this.cobroDelRecibo(userId, registrationId);
+    return this.payments.comprobante(userId, pago.id);
+  }
+
+  async archivoDelRecibo(userId: string, registrationId: string): Promise<Buffer> {
+    const pago = await this.cobroDelRecibo(userId, registrationId);
+    return this.payments.archivoDelRecibo(userId, pago.id);
+  }
+
+  private async cobroDelRecibo(userId: string, registrationId: string) {
     const carrera = await this.buscarPropia(userId, registrationId);
 
     const pagado = await this.prisma.payment.findFirst({
@@ -203,7 +213,7 @@ export class RacesService {
       );
     }
 
-    return this.payments.comprobante(userId, pagado.id);
+    return pagado;
   }
 
   /**
