@@ -1,7 +1,22 @@
-import { Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
+import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
+import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { NotificationsService } from './notifications.service';
+
+export class PushTokenDto {
+  @ApiProperty({ description: 'El mismo `deviceId` que se manda al iniciar sesion' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(128)
+  deviceId!: string;
+
+  @ApiProperty({ description: 'Token de FCM de esta instalacion' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
+  token!: string;
+}
 
 /** La bandeja de la campana. Cada usuario ve solo la suya. */
 @ApiTags('notifications')
@@ -21,6 +36,13 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Marcar todas como leidas' })
   markAllRead(@CurrentUser('sub') userId: string) {
     return this.notifications.markAllRead(userId);
+  }
+
+  @Put('push-token')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Registra el token de FCM de este telefono' })
+  setPushToken(@CurrentUser('sub') userId: string, @Body() dto: PushTokenDto) {
+    return this.notifications.setPushToken(userId, dto.deviceId, dto.token);
   }
 
   @Post(':id/read')

@@ -64,6 +64,9 @@ export const envSchema = z.object({
         .map((s) => s.trim())
         .filter(Boolean),
     ),
+  /// Ruta al JSON de la cuenta de servicio de Firebase (Admin SDK). Sin ella
+  /// los push se escriben en consola y no llegan a ningun telefono.
+  FIREBASE_CREDENTIALS: z.string().optional(),
   /// Peticiones por minuto y por IP en el resto de la API.
   GLOBAL_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
   /// Lotes de posiciones por minuto y POR SESION (no por IP: media maraton sale

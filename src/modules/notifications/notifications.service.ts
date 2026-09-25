@@ -243,6 +243,27 @@ export class NotificationsService {
     });
   }
 
+  /**
+   * El token se cuelga del `Device` de esta instalacion, y el dueño se
+   * reescribe como en `registrarDispositivo`: en un telefono que se turnan dos
+   * cuentas, los avisos son del que inicio sesion el ultimo. Otra fila con el
+   * mismo token (reinstalacion con `deviceId` nuevo) lo suelta, o ese telefono
+   * recibiria cada aviso dos veces.
+   */
+  async setPushToken(userId: string, uniqueId: string, token: string): Promise<void> {
+    await this.prisma.$transaction([
+      this.prisma.device.updateMany({
+        where: { pushToken: token, uniqueId: { not: uniqueId } },
+        data: { pushToken: null },
+      }),
+      this.prisma.device.upsert({
+        where: { uniqueId },
+        create: { userId, uniqueId, pushToken: token },
+        update: { userId, pushToken: token, lastSeenAt: new Date() },
+      }),
+    ]);
+  }
+
   private toDto(fila: Notification): NotificationDto {
     return {
       id: fila.id,

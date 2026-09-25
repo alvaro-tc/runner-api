@@ -2495,8 +2495,9 @@ la guía: Node 22 LTS, PostgreSQL 17, Redis 7, Caddy 2.
 - **Purga automática de posiciones** — la política de retención está arriba
   (Checkpoint 17c) y el `DROP TABLE` de la partición vencida es una línea, pero
   hoy se ejecuta a mano. Va con el resto del mantenimiento programado.
-- **Notificaciones push reales** — el driver es `console`. Lo que falta para FCM
-  está listado arriba, en la Fase 16.
+- ~~**Notificaciones push reales**~~ — `FcmPushSender` si hay
+  `FIREBASE_CREDENTIALS`; la app sube su token a `PUT /notifications/push-token`.
+  Falta iOS (clave APNs).
 - **CRUD del catálogo en el panel** — crear y editar maratones, categorías,
   extras y plantillas de plan. Es lo que AdminJS regalaba y lo que su descarte
   deja pendiente; da para una fase propia.
