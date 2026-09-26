@@ -1104,6 +1104,7 @@ model RaceResult {
   bestKmIndex         Int?
 
   overallRank  Int?
+  manualOverallRank Int?
   categoryRank Int?
 
   finishedAt   DateTime

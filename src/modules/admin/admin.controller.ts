@@ -668,6 +668,12 @@ export class AdminController {
 
   // ─── Resultados ──────────────────────────────────────────────────────────
 
+  @Get('marathons/:id/results')
+  @ApiOperation({ summary: 'Ver los puestos del podio manual registrados' })
+  listarPodioManual(@Param('id') id: string) {
+    return this.admin.listarPodioManual(id);
+  }
+
   @Post('marathons/:id/results')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -675,7 +681,8 @@ export class AdminController {
     description:
       'Los resultados llegan **por dorsal**, que es como los entrega cualquier cronometraje. ' +
       'Un dorsal desconocido no tumba la carga: vuelve en `unknownBibs`. Es idempotente, y los ' +
-      'puestos se recalculan una sola vez al final.',
+      'puestos se recalculan una sola vez al final. `overallRank` opcional fija el puesto oficial ' +
+      'manual (1, 2 o 3); los demás puestos se calculan sin ocupar esos lugares.',
   })
   @ApiResponse({ status: 200, type: ImportResultsResponseDto })
   importarResultados(@Param('id') id: string, @Body() dto: ImportResultsDto) {

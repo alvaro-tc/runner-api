@@ -744,7 +744,8 @@ GET    /admin/payments/pending-transfers           ← `bank_transfer` y `qr_man
 POST   /admin/payments/:id/confirm-transfer
 POST   /admin/payments/:id/refund                   ← admin | organizer · devuelve y anula la inscripción
 
-POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal
+GET    /admin/marathons/:id/results                ← consultar puestos del podio manual
+POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal y podio manual
 POST   /admin/marathons/:id/recalculate-ranks
 
 GET    /admin/users?q=&role=&page=&pageSize=       ← admin | organizer · `meta.total`; `q` busca email, CI, nombre y celular
@@ -942,7 +943,11 @@ eso es como se acaba con dos personas con el mismo dorsal.
 
 ```json
 POST /admin/marathons/:id/results
-{ "results": [{ "bibNumber": "MLP-0001", "finishTimeSeconds": 10850, "chipTimeSeconds": 10800 }] }
+{ "results": [
+  { "bibNumber": "MLP-0001", "finishTimeSeconds": 10850, "chipTimeSeconds": 10800, "overallRank": 1 },
+  { "bibNumber": "MLP-0002", "finishTimeSeconds": 11200, "overallRank": 2 },
+  { "bibNumber": "MLP-0003", "finishTimeSeconds": 11900, "overallRank": 3 }
+] }
 → { "imported": 128, "skipped": 2, "unknownBibs": ["MLP-9999"] }
 ```
 
@@ -950,6 +955,11 @@ Llegan **por dorsal**, que es como los entrega cualquier cronometraje. Un dorsal
 desconocido no tumba la carga: una lista de 3.000 líneas con dos erratas tiene
 que poder subirse igual. Es idempotente —reimportar reescribe lo mismo— y los
 puestos se recalculan **una sola vez al final**, no por fila.
+`overallRank` es opcional y admite únicamente 1, 2 o 3. Estos puestos quedan
+guardados como oficiales y reservados cuando se recalcula la clasificación; los
+demás corredores se ordenan por tiempo sin ocupar esos lugares. Los tres dorsales
+del podio deben existir y ser distintos. `GET /admin/marathons/:id/results`
+devuelve los puestos manuales para revisar o corregir la planilla.
 
 `distanceMeters` y `finishedAt` son opcionales: por defecto, la distancia de la
 maratón y la hora de largada más el tiempo oficial.

@@ -564,48 +564,97 @@ export class AdminService {
   async importarResultados(marathonId: string, dto: ImportResultsDto) {
     const maraton = await this.buscarMaraton(marathonId);
 
-    const dorsales = dto.results.map((r) => r.bibNumber);
+    const dorsalesEnCarga = dto.results.map((fila) => fila.bibNumber);
+    const puestosManuales = dto.results
+      .map((fila) => fila.overallRank)
+      .filter((puesto): puesto is number => puesto != null);
+    if (new Set(dorsalesEnCarga).size !== dorsalesEnCarga.length) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'La planilla contiene dorsales repetidos',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (new Set(puestosManuales).size !== puestosManuales.length) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Cada puesto manual debe asignarse a un solo dorsal',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const dorsales = dorsalesEnCarga;
     const registros = await this.prisma.registration.findMany({
-      where: { marathonId, bibNumber: { in: dorsales }, deletedAt: null },
+      where: {
+        marathonId,
+        bibNumber: { in: dorsales },
+        status: RegistrationStatus.confirmed,
+        deletedAt: null,
+      },
       select: { id: true, bibNumber: true },
     });
 
     const porDorsal = new Map(registros.map((r) => [r.bibNumber!, r.id]));
+    const dorsalesDesconocidos = dorsales.filter((dorsal) => !porDorsal.has(dorsal));
+    if (
+      dorsalesDesconocidos.some((dorsal) =>
+        dto.results.some((fila) => fila.bibNumber === dorsal && fila.overallRank != null),
+      )
+    ) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        `Dorsal de podio desconocido: ${dorsalesDesconocidos.join(', ')}`,
+        HttpStatus.BAD_REQUEST,
+      );
+    }
     const unknownBibs: string[] = [];
     let imported = 0;
 
-    for (const fila of dto.results) {
-      const registrationId = porDorsal.get(fila.bibNumber);
-      if (!registrationId) {
-        unknownBibs.push(fila.bibNumber);
-        continue;
+    await this.prisma.$transaction(async (tx) => {
+      if (puestosManuales.length > 0) {
+        await tx.raceResult.updateMany({
+          where: {
+            manualOverallRank: { in: puestosManuales },
+            registration: { marathonId },
+          },
+          data: { manualOverallRank: null },
+        });
       }
 
-      const finishedAt = fila.finishedAt
-        ? new Date(fila.finishedAt)
-        : new Date(maraton.startsAt.getTime() + fila.finishTimeSeconds * 1000);
+      for (const fila of dto.results) {
+        const registrationId = porDorsal.get(fila.bibNumber);
+        if (!registrationId) {
+          unknownBibs.push(fila.bibNumber);
+          continue;
+        }
 
-      const distanceMeters = fila.distanceMeters ?? maraton.distanceMeters;
-      const datos = {
-        finishTimeSeconds: fila.finishTimeSeconds,
-        chipTimeSeconds: fila.chipTimeSeconds ?? null,
-        distanceMeters,
-        // El ritmo se deriva del tiempo oficial: quien sube un CSV de
-        // cronometraje no tiene por que calcularlo, y calcularlo dos veces en
-        // sitios distintos es como se desincroniza.
-        avgPaceSecPerKm: Math.round((fila.finishTimeSeconds * 1000) / distanceMeters),
-        avgSpeedMps: distanceMeters / fila.finishTimeSeconds,
-        finishedAt,
-      };
+        const finishedAt = fila.finishedAt
+          ? new Date(fila.finishedAt)
+          : new Date(maraton.startsAt.getTime() + fila.finishTimeSeconds * 1000);
 
-      await this.prisma.raceResult.upsert({
-        where: { registrationId },
-        create: { registrationId, ...datos },
-        update: datos,
-      });
+        const distanceMeters = fila.distanceMeters ?? maraton.distanceMeters;
+        const datos = {
+          finishTimeSeconds: fila.finishTimeSeconds,
+          chipTimeSeconds: fila.chipTimeSeconds ?? null,
+          distanceMeters,
+          // El ritmo se deriva del tiempo oficial: quien sube un CSV de
+          // cronometraje no tiene por que calcularlo, y calcularlo dos veces en
+          // sitios distintos es como se desincroniza.
+          avgPaceSecPerKm: Math.round((fila.finishTimeSeconds * 1000) / distanceMeters),
+          avgSpeedMps: distanceMeters / fila.finishTimeSeconds,
+          finishedAt,
+          manualOverallRank: fila.overallRank ?? null,
+        };
 
-      imported += 1;
-    }
+        await tx.raceResult.upsert({
+          where: { registrationId },
+          create: { registrationId, ...datos },
+          update: datos,
+        });
+
+        imported += 1;
+      }
+    });
 
     await this.races.recalcularPuestos(marathonId);
 
@@ -614,6 +663,33 @@ export class AdminService {
     );
 
     return { imported, skipped: unknownBibs.length, unknownBibs };
+  }
+
+  async listarPodioManual(marathonId: string) {
+    await this.buscarMaraton(marathonId);
+    const resultados = await this.prisma.raceResult.findMany({
+      where: {
+        manualOverallRank: { not: null },
+        registration: { marathonId, deletedAt: null },
+      },
+      orderBy: { manualOverallRank: 'asc' },
+      select: {
+        manualOverallRank: true,
+        finishTimeSeconds: true,
+        chipTimeSeconds: true,
+        registration: {
+          select: { bibNumber: true, user: { select: { name: true } } },
+        },
+      },
+    });
+
+    return resultados.map((resultado) => ({
+      overallRank: resultado.manualOverallRank,
+      bibNumber: resultado.registration.bibNumber,
+      runner: resultado.registration.user.name,
+      finishTimeSeconds: resultado.finishTimeSeconds,
+      chipTimeSeconds: resultado.chipTimeSeconds,
+    }));
   }
 
   /** Recalcula puestos sin tocar tiempos. Para después de corregir uno a mano. */

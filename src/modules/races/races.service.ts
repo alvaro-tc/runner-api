@@ -359,14 +359,17 @@ export class RacesService {
         id: true,
         finishTimeSeconds: true,
         overallRank: true,
+        manualOverallRank: true,
         categoryRank: true,
         registration: { select: { categoryId: true } },
       },
     });
 
-    // Por cada clasificacion se llevan dos cuentas: cuantos van (que decide el
-    // puesto del siguiente que mejore el tiempo) y el ultimo tiempo visto (que
-    // decide si hay empate). Con una sola no se pueden tener las dos cosas.
+    // El podio manual reserva sus posiciones; los demas compiten por tiempo en
+    // los lugares disponibles y los empates conservan el mismo puesto.
+    const puestosManuales = new Set(
+      resultados.flatMap((r) => (r.manualOverallRank === null ? [] : [r.manualOverallRank])),
+    );
     const general = { vistos: 0, puesto: 0, ultimoTiempo: null as number | null };
     const porCategoria = new Map<string, typeof general>();
     const cambios: { id: string; overallRank: number; categoryRank: number | null }[] = [];
@@ -381,7 +384,26 @@ export class RacesService {
     };
 
     for (const r of resultados) {
-      const overallRank = situar(general, r.finishTimeSeconds);
+      let overallRank: number;
+      if (r.manualOverallRank !== null) {
+        overallRank = r.manualOverallRank;
+      } else {
+        general.vistos += 1;
+        if (r.finishTimeSeconds !== general.ultimoTiempo) {
+          let puesto = general.vistos;
+          while (true) {
+            const reservadosAnteriores = [...puestosManuales].filter(
+              (reservado) => reservado <= puesto,
+            ).length;
+            const siguiente = general.vistos + reservadosAnteriores;
+            if (siguiente === puesto) break;
+            puesto = siguiente;
+          }
+          general.puesto = puesto;
+          general.ultimoTiempo = r.finishTimeSeconds;
+        }
+        overallRank = general.puesto;
+      }
 
       const clave = r.registration.categoryId;
       let categoryRank: number | null = null;
