@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, normalize, resolve, sep } from 'node:path';
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { AppConfigService } from '../../config/app-config.service';
@@ -28,6 +28,7 @@ export interface StoredFile {
  */
 @Injectable()
 export abstract class StorageService {
+  abstract read(key: string): Promise<Buffer>;
   abstract save(key: string, data: Buffer): Promise<StoredFile>;
   /** Falla si el destino no admite escrituras. Se llama al arrancar. */
   abstract assertWritable(): Promise<void>;
@@ -78,6 +79,10 @@ export class LocalStorageService extends StorageService {
    * `errno` reales, y al cliente le llega un 503 que dice que el problema es
    * del servidor y no de su imagen.
    */
+  async read(key: string): Promise<Buffer> {
+    return readFile(this.resolveKey(key));
+  }
+
   async save(key: string, data: Buffer): Promise<StoredFile> {
     const destino = this.resolveKey(key);
 

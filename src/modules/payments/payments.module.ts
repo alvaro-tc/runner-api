@@ -5,6 +5,7 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PAYMENT_PROVIDER } from './payment-provider';
 import { MockPaymentProvider } from './mock/mock-payment.provider';
+import { ReceiptRecoveryService } from './receipt/receipt-recovery.service';
 import { ReceiptService } from './receipt/receipt.service';
 // TEMPORAL — cobro por QR verificado a mano. Borrar estas dos lineas, la carpeta
 // `manual-qr/` y las dos entradas de abajo desmonta el flujo entero.
@@ -32,6 +33,7 @@ import { PaymentProofService } from './manual-qr/payment-proof.service';
   providers: [
     PaymentsService,
     ReceiptService,
+    ReceiptRecoveryService,
     PaymentProofService,
     { provide: PAYMENT_PROVIDER, useClass: MockPaymentProvider },
   ],

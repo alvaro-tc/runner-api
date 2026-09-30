@@ -1135,9 +1135,9 @@ paths:
   /api/v1/payments/{id}/receipt:
     get:
       description: >-
-        Devuelve la URL del PDF, en espanol y con los montos en Bs. Se genera la primera vez y se
-        reutiliza: sale de los datos congelados de la inscripcion, asi que regenerarlo daria siempre
-        lo mismo. **No es una factura**: no esta dosificado y no da credito fiscal.
+        Devuelve la URL del recibo de donación emitido al confirmar el pago. Usa la plantilla
+        original del CAM y el importe efectivamente cobrado. Si la emisión estaba pendiente, se
+        reintenta al consultar. **No es una factura**.
       operationId: PaymentsController_receipt
       parameters:
         - name: id
@@ -2247,6 +2247,28 @@ paths:
       security:
         - access-token: []
       summary: Parciales por kilómetro y marcadores de paso
+      tags:
+        - races
+  /api/v1/races/{registrationId}/receipt/pdf:
+    get:
+      operationId: RacesController_receiptFile
+      parameters:
+        - name: registrationId
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          content:
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+          description: ''
+      security:
+        - access-token: []
+      summary: Descargar el recibo PDF de una inscripción propia
       tags:
         - races
   /api/v1/races/{registrationId}/receipt:

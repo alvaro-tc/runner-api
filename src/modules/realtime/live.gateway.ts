@@ -10,7 +10,7 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../database/prisma.service';
 import { TokenService } from '../auth/token.service';
-import { UserRole } from '../../../generated/prisma/enums';
+import { RegistrationStatus, UserRole } from '../../../generated/prisma/enums';
 import type { EstadoDeMaraton, LlegadaEnVivo, PosicionEnVivo } from './live-state';
 
 /** Namespace del seguimiento en vivo. Separado del resto por si algun dia lo hay. */
@@ -32,9 +32,21 @@ export function salaDeUsuario(userId: string): string {
   return `user:${userId}`;
 }
 
+function salaDeEstado(marathonId: string): string {
+  return `marathon:${marathonId}:state`;
+}
+
+function salaDeCorredor(marathonId: string, bib: string): string {
+  return `marathon:${marathonId}:runner:${bib}`;
+}
+
 interface SocketDeEspectador extends Socket {
   userId?: string;
+  authenticated?: Promise<void>;
   role?: UserRole;
+  runnerRooms?: Map<string, string>;
+  subscriptions?: Map<string, number>;
+  subscriptionVersion?: number;
 }
 
 /**
@@ -72,6 +84,11 @@ export class LiveGateway implements OnGatewayConnection {
    * espectador viendo dorsales quince minutos de mas.
    */
   async handleConnection(socket: SocketDeEspectador): Promise<void> {
+    socket.authenticated = this.authenticate(socket);
+    await socket.authenticated;
+  }
+
+  private async authenticate(socket: SocketDeEspectador): Promise<void> {
     const token = extraerToken(socket);
 
     if (!token) {
@@ -109,9 +126,17 @@ export class LiveGateway implements OnGatewayConnection {
   @SubscribeMessage('spectate')
   async spectate(
     @ConnectedSocket() socket: SocketDeEspectador,
-    @MessageBody() body: { marathonId?: string },
+    @MessageBody() body: { marathonId?: string; positions?: boolean },
   ): Promise<{ ok: boolean; room?: string; error?: string }> {
     const marathonId = typeof body?.marathonId === 'string' ? body.marathonId : '';
+    const subscription = `${marathonId}:${body?.positions === false ? 'runner' : 'map'}`;
+    socket.subscriptions ??= new Map();
+    const version = (socket.subscriptionVersion ?? 0) + 1;
+    socket.subscriptionVersion = version;
+    socket.subscriptions.set(subscription, version);
+    const current = () => socket.subscriptions?.get(subscription) === version;
+    await socket.authenticated;
+    if (!socket.userId) return { ok: false, error: 'UNAUTHORIZED' };
     const gestiona = socket.role === UserRole.admin || socket.role === UserRole.organizer;
 
     const existe = await this.prisma.marathon.count({
@@ -122,18 +147,72 @@ export class LiveGateway implements OnGatewayConnection {
 
     if (existe === 0) return { ok: false, error: 'MARATHON_NOT_FOUND' };
 
+    // The runner needs race controls and their own lap updates, not every GPS
+    // update in the event. Existing spectators keep the complete live feed.
+    if (body.positions === false) {
+      if (!socket.userId) return { ok: false, error: 'UNAUTHORIZED' };
+      const registration = await this.prisma.registration.findFirst({
+        where: {
+          marathonId,
+          userId: socket.userId,
+          status: RegistrationStatus.confirmed,
+          deletedAt: null,
+        },
+        select: { bibNumber: true },
+      });
+      if (!registration) return { ok: false, error: 'REGISTRATION_NOT_FOUND' };
+      if (!current()) return { ok: false, error: 'SUBSCRIPTION_CANCELLED' };
+      const room = salaDeEstado(marathonId);
+      await socket.join(room);
+      if (!current()) {
+        if (!socket.subscriptions.has(subscription)) await socket.leave(room);
+        return { ok: false, error: 'SUBSCRIPTION_CANCELLED' };
+      }
+      if (registration.bibNumber) {
+        const ownRoom = salaDeCorredor(marathonId, registration.bibNumber);
+        const previous = socket.runnerRooms?.get(marathonId);
+        if (previous && previous !== ownRoom) await socket.leave(previous);
+        await socket.join(ownRoom);
+        socket.runnerRooms ??= new Map();
+        socket.runnerRooms.set(marathonId, ownRoom);
+      }
+      if (!current()) {
+        if (!socket.subscriptions.has(subscription)) {
+          await socket.leave(room);
+          const ownRoom = socket.runnerRooms?.get(marathonId);
+          if (ownRoom) await socket.leave(ownRoom);
+          socket.runnerRooms?.delete(marathonId);
+        }
+        return { ok: false, error: 'SUBSCRIPTION_CANCELLED' };
+      }
+      return { ok: true, room };
+    }
+
+    if (!current()) return { ok: false, error: 'SUBSCRIPTION_CANCELLED' };
     const room = salaDeMaraton(marathonId);
     await socket.join(room);
-
+    if (!current()) {
+      if (!socket.subscriptions.has(subscription)) await socket.leave(room);
+      return { ok: false, error: 'SUBSCRIPTION_CANCELLED' };
+    }
     return { ok: true, room };
   }
 
   @SubscribeMessage('leave')
   async leave(
-    @ConnectedSocket() socket: Socket,
-    @MessageBody() body: { marathonId?: string },
+    @ConnectedSocket() socket: SocketDeEspectador,
+    @MessageBody() body: { marathonId?: string; positions?: boolean },
   ): Promise<{ ok: boolean }> {
-    await socket.leave(salaDeMaraton(String(body?.marathonId ?? '')));
+    const id = String(body?.marathonId ?? '');
+    if (body?.positions !== false) socket.subscriptions?.delete(`${id}:map`);
+    if (body?.positions !== true) socket.subscriptions?.delete(`${id}:runner`);
+    if (body?.positions !== false) await socket.leave(salaDeMaraton(id));
+    if (body?.positions !== true) {
+      await socket.leave(salaDeEstado(id));
+      const ownRoom = socket.runnerRooms?.get(id);
+      if (ownRoom) await socket.leave(ownRoom);
+      socket.runnerRooms?.delete(id);
+    }
     return { ok: true };
   }
 
@@ -153,7 +232,9 @@ export class LiveGateway implements OnGatewayConnection {
       return;
     }
 
-    this.server.to(salaDeMaraton(marathonId)).emit('runner:position', payload);
+    const rooms = [salaDeMaraton(marathonId)];
+    if (payload.bib) rooms.push(salaDeCorredor(marathonId, payload.bib));
+    this.server.to(rooms).emit('runner:position', payload);
   }
 
   /**
@@ -179,7 +260,11 @@ export class LiveGateway implements OnGatewayConnection {
       return;
     }
 
-    const salas = [salaDeMaraton(marathonId), ...inscritos.map(salaDeUsuario)];
+    const salas = [
+      salaDeMaraton(marathonId),
+      salaDeEstado(marathonId),
+      ...inscritos.map(salaDeUsuario),
+    ];
     this.server.to(salas).emit('marathon:state', estado);
   }
 
@@ -224,7 +309,9 @@ export class LiveGateway implements OnGatewayConnection {
       return;
     }
 
-    this.server.to(salaDeMaraton(marathonId)).emit('runner:finish', llegada);
+    const rooms = [salaDeMaraton(marathonId)];
+    if (llegada.bib) rooms.push(salaDeCorredor(marathonId, llegada.bib));
+    this.server.to(rooms).emit('runner:finish', llegada);
   }
 }
 
