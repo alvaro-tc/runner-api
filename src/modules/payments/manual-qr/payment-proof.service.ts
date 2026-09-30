@@ -322,7 +322,7 @@ export class PaymentProofService {
     });
     if (!pago) return;
 
-    await this.notifications.notifyStaff({
+    await this.notifications.notifyOrganizers({
       type: 'payment.proof_submitted',
       proofId,
       paymentId,

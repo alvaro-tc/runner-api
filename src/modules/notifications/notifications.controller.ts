@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post, Put } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -36,6 +36,21 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Marcar todas como leidas' })
   markAllRead(@CurrentUser('sub') userId: string) {
     return this.notifications.markAllRead(userId);
+  }
+
+  // Antes que `:id`: si no, `read` casaria como un id.
+  @Delete('read')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Borrar todas las ya leidas' })
+  removeRead(@CurrentUser('sub') userId: string) {
+    return this.notifications.removeRead(userId);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Borrar una' })
+  remove(@CurrentUser('sub') userId: string, @Param('id') id: string) {
+    return this.notifications.remove(userId, id);
   }
 
   @Put('push-token')

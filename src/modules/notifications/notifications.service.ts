@@ -198,13 +198,13 @@ export class NotificationsService {
   }
 
   /**
-   * A todo el equipo que valida pagos. No hay organizador por maraton —el rol
-   * las ve todas—, asi que el aviso va a todos los que pueden atenderlo.
+   * A los organizadores: son los que validan pagos. El admin no, aunque pueda.
+   * No hay organizador por maraton —el rol las ve todas—, asi que va a todos.
    */
-  async notifyStaff(event: NotificationEvent): Promise<void> {
+  async notifyOrganizers(event: NotificationEvent): Promise<void> {
     try {
       const equipo = await this.prisma.user.findMany({
-        where: { role: { in: [UserRole.admin, UserRole.organizer] }, deletedAt: null },
+        where: { role: UserRole.organizer, deletedAt: null },
         select: { id: true },
       });
       await Promise.all(equipo.map((u) => this.notify(u.id, event)));
@@ -241,6 +241,16 @@ export class NotificationsService {
       where: { userId, readAt: null },
       data: { readAt: new Date() },
     });
+  }
+
+  /** Borrar es definitivo: la bandeja es del usuario, no un registro de auditoria. */
+  async remove(userId: string, id: string): Promise<void> {
+    await this.prisma.notification.deleteMany({ where: { id, userId } });
+  }
+
+  /** Limpia lo ya leido; lo pendiente se queda para que no se pierda un aviso. */
+  async removeRead(userId: string): Promise<void> {
+    await this.prisma.notification.deleteMany({ where: { userId, readAt: { not: null } } });
   }
 
   /**
