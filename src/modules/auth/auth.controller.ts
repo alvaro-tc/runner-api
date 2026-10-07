@@ -19,6 +19,8 @@ import type { AccessTokenPayload, DeviceInfo } from './token.service';
 import { DISPOSITIVO_DESCONOCIDO } from '../../common/devices';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import {
+  AppleLoginDto,
+  AppleNotificationDto,
   AuthSessionResponseDto,
   AuthUserDto,
   ChangePasswordDto,
@@ -97,6 +99,56 @@ export class AuthController {
   })
   google(@Body() dto: GoogleLoginDto, @Req() req: Request) {
     return this.auth.loginWithGoogle(dto.idToken, this.device(dto, req));
+  }
+
+  @Public()
+  @Post('apple')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(LIMITE_CREDENCIALES)
+  @ApiOperation({
+    summary: 'Entra con Apple; crea la cuenta si es la primera vez',
+    description:
+      'Recibe la credencial de Sign in with Apple del telefono: identity token, codigo de ' +
+      'autorizacion, el nonce sin hashear y —solo la primera vez— el nombre. Verifica el ' +
+      'token contra las claves publicas de Apple, canjea el codigo por el refresh token que ' +
+      'se revoca al borrar la cuenta y devuelve el mismo par de tokens que /auth/login.',
+  })
+  @ApiResponse({ status: 200, type: AuthSessionResponseDto })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'INVALID_CREDENTIALS' })
+  @ApiResponse({
+    status: 409,
+    type: ErrorResponseDto,
+    description: 'EMAIL_ALREADY_REGISTERED: ese correo ya esta vinculado a otra Apple Account',
+  })
+  @ApiResponse({
+    status: 503,
+    type: ErrorResponseDto,
+    description: 'SERVICE_UNAVAILABLE: falta APPLE_CLIENT_IDS en el entorno',
+  })
+  apple(@Body() dto: AppleLoginDto, @Req() req: Request) {
+    return this.auth.loginWithApple(dto, this.device(dto, req));
+  }
+
+  /**
+   * Endpoint de notificaciones servidor a servidor de Sign in with Apple. Se
+   * registra en Certificates, IDs & Profiles, en la configuracion de Sign in
+   * with Apple del App ID. Lo llama Apple, no la app: sin sesion, y la
+   * autenticidad la da la firma del `payload`.
+   */
+  @Public()
+  @Post('apple/notifications')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Notificaciones servidor a servidor de Sign in with Apple',
+    description:
+      'Apple avisa aqui cuando el usuario deja de usar Sign in with Apple con la app ' +
+      '(consent-revoked), borra su Apple Account (account-deleted) o cambia el reenvio de su ' +
+      'correo oculto (email-enabled / email-disabled). El cuerpo es un JWS firmado por Apple.',
+  })
+  @ApiResponse({ status: 200, description: 'Notificacion procesada' })
+  @ApiResponse({ status: 401, type: ErrorResponseDto, description: 'Firma o emisor invalidos' })
+  appleNotifications(@Body() dto: AppleNotificationDto) {
+    return this.auth.handleAppleNotification(dto.payload);
   }
 
   @Public()

@@ -8,6 +8,7 @@ import { camposPresentes } from '../../common/utils/patch';
 import { esCiValida, normalizarCi } from '../auth/ci';
 import { rangoSemanal } from '../../common/time/week';
 import { StorageService } from '../storage/storage.service';
+import { AppleClient } from '../auth/social/apple.client';
 import { RegistrationsService } from '../registrations/registrations.service';
 import { RegistrationStatus } from '../../../generated/prisma/enums';
 import type { Prisma } from '../../../generated/prisma/client';
@@ -35,6 +36,7 @@ export class UsersService {
     private readonly storage: StorageService,
     private readonly config: AppConfigService,
     private readonly registrations: RegistrationsService,
+    private readonly appleClient: AppleClient,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -339,7 +341,7 @@ export class UsersService {
    * seis meses— tambien se limpie, en vez de quedarse huerfana porque nadie se
    * acordo de sumarla a la lista de aqui.
    *
-   * Lo que si hay que hacer a mano son las dos cosas que la base no sabe:
+   * Lo que si hay que hacer a mano son las tres cosas que la base no sabe:
    *
    * 1. **Soltar los cupos.** Borrar la fila de una inscripcion confirmada no
    *    baja el `slotsTaken` de la maraton: la plaza quedaria ocupada por
@@ -349,6 +351,10 @@ export class UsersService {
    * 2. **Borrar los archivos.** Avatar, comprobantes y tarjetas de resultado
    *    viven en disco (o manana en S3), fuera del alcance de cualquier
    *    `ON DELETE CASCADE`.
+   * 3. **Revocar Sign in with Apple.** Apple exige que una app que ofrece
+   *    Sign in with Apple revoque el token del usuario cuando este borra su
+   *    cuenta: asi la app desaparece de "Apps que usan tu Apple Account" y,
+   *    si vuelve, empieza de cero.
    *
    * No es soft delete. `deletedAt` esta para lo que duele perder por un
    * descuido —un entrenamiento, una inscripcion—, no para una cuenta que su
@@ -358,7 +364,7 @@ export class UsersService {
    * El borrado es irreversible y el telefono puede estar en otras manos, asi
    * que no basta con la sesion abierta: hay que demostrar que se es el dueno.
    *
-   * Quien entro con Google no tiene contrasena que escribir. Para esos la
+   * Quien entro con Google o Apple no tiene contrasena que escribir. Para esos la
    * sesion es la unica prueba que existe, y exigir una contrasena inventada
    * solo conseguiria que no pudieran borrarse nunca — algo que Google Play
    * exige que se pueda. La comprobacion es por eso condicional al dato, no al
@@ -374,7 +380,8 @@ export class UsersService {
       throw new AppException(ErrorCode.NOT_FOUND, 'Usuario no encontrado', HttpStatus.NOT_FOUND);
     }
 
-    // Cuenta de Google: sin contrasena que comprobar, la sesion ya la valida.
+    // Cuenta de Google o Apple: sin contrasena que comprobar, la sesion ya la
+    // valida.
     if (!user.passwordHash) return;
 
     const valida = password
@@ -392,7 +399,6 @@ export class UsersService {
 
   async borrarCuenta(userId: string, password?: string): Promise<{ ok: true }> {
     await this.exigirConfirmacion(userId, password);
-
 
     const vigentes = await this.prisma.registration.findMany({
       where: {
@@ -422,6 +428,10 @@ export class UsersService {
     }
 
     const archivos = await this.archivosDe(userId);
+    const apple = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { appleRefreshToken: true, appleClientId: true },
+    });
 
     await this.prisma.user.delete({ where: { id: userId } });
 
@@ -429,6 +439,13 @@ export class UsersService {
     // sigue existiendo se habria quedado sin su avatar y sin sus comprobantes.
     // Al reves, lo peor que pasa es un archivo huerfano en disco.
     for (const clave of archivos) await this.storage.delete(clave);
+
+    // Lo mismo con Apple: revocar y que el borrado falle dejaria una cuenta
+    // viva desconectada de Apple. Un fallo de red aqui no deshace el borrado
+    // —ese derecho no depende de Apple—; queda en el log.
+    if (apple?.appleRefreshToken && apple.appleClientId) {
+      await this.appleClient.revoke(apple.appleRefreshToken, apple.appleClientId);
+    }
 
     this.logger.log(`Cuenta ${userId} borrada (${archivos.length} archivo/s eliminado/s)`);
 

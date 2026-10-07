@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { z } from 'zod';
 
 /**
@@ -64,6 +65,36 @@ export const envSchema = z.object({
         .map((s) => s.trim())
         .filter(Boolean),
     ),
+  /// Sign in with Apple: `client_id` aceptados como `aud` del identity token,
+  /// separados por comas. En la app nativa de iOS es el **bundle ID**
+  /// (`com.tumype.camrun`); si algun dia se entra con Apple desde la web o
+  /// Android, se suma el Services ID. Igual que con Google, nunca vacio con el
+  /// `aud` sin comprobar: aceptaria tokens emitidos para cualquier app.
+  ///
+  /// Opcional: sin el, `/auth/apple` responde 503. No es un secreto.
+  APPLE_CLIENT_IDS: z
+    .string()
+    .optional()
+    .transform((v) =>
+      (v ?? '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    ),
+  /// Team ID del equipo de Apple Developer (10 caracteres). Con la clave de
+  /// abajo firma el `client_secret` de la API REST de Apple.
+  APPLE_TEAM_ID: z.string().trim().optional(),
+  /// Key ID de la clave "Sign in with Apple" creada en Certificates, IDs &
+  /// Profiles > Keys (10 caracteres).
+  APPLE_KEY_ID: z.string().trim().optional(),
+  /// Contenido del `.p8` de esa clave (PEM). En una sola linea vale con `\n`
+  /// escapados. **Es un secreto**: con ella se canjean y revocan tokens de los
+  /// usuarios. Sin las tres (team, key, clave) el login con Apple funciona pero
+  /// no se puede revocar el token al borrar una cuenta, que Apple exige.
+  APPLE_PRIVATE_KEY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.replace(/\\n/g, '\n').trim() : undefined)),
   /// Ruta al JSON de la cuenta de servicio de Firebase (Admin SDK). Sin ella
   /// los push se escriben en consola y no llegan a ningun telefono.
   FIREBASE_CREDENTIALS: z.string().optional(),
@@ -214,6 +245,28 @@ export function validateEnv(raw: Record<string, unknown>): Env {
       'Configuracion de entorno invalida:\n  - PAYMENT_WEBHOOK_SECRET: el valor por defecto ' +
         'no se permite en produccion (generalo con `openssl rand -base64 32`)',
     );
+  }
+
+  const apple = [
+    parsed.data.APPLE_TEAM_ID,
+    parsed.data.APPLE_KEY_ID,
+    parsed.data.APPLE_PRIVATE_KEY,
+  ].filter(Boolean).length;
+  if (apple !== 0 && apple !== 3) {
+    throw new Error(
+      'Configuracion de entorno invalida:\n  - APPLE_TEAM_ID, APPLE_KEY_ID y APPLE_PRIVATE_KEY ' +
+        'van juntas: con una sola no se puede firmar el client_secret de Apple',
+    );
+  }
+  if (parsed.data.APPLE_PRIVATE_KEY) {
+    try {
+      createPrivateKey(parsed.data.APPLE_PRIVATE_KEY);
+    } catch {
+      throw new Error(
+        'Configuracion de entorno invalida:\n  - APPLE_PRIVATE_KEY: no es una clave PEM valida ' +
+          '(pega el contenido del .p8, con los saltos de linea o con \\n)',
+      );
+    }
   }
 
   if (parsed.data.NODE_ENV === 'production' && parsed.data.CORS_ORIGINS.trim() === '*') {

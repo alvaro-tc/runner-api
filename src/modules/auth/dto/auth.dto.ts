@@ -157,6 +157,65 @@ export class GoogleLoginDto extends DeviceDto {
   idToken!: string;
 }
 
+/**
+ * Acceso con Apple. Todo sale de `ASAuthorizationAppleIDCredential` en el
+ * telefono: el servidor verifica el identity token, comprueba el nonce y canjea
+ * el codigo por el refresh token que hara falta para revocar al borrar la
+ * cuenta.
+ *
+ * El nombre **solo llega la primera vez** que alguien autoriza la app: Apple no
+ * lo vuelve a mandar nunca, y tampoco va dentro del token. Por eso viaja aparte
+ * y la cuenta se crea con el.
+ */
+export class AppleLoginDto extends DeviceDto {
+  @ApiProperty({ description: 'Identity token de Apple (JWT firmado por appleid.apple.com).' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(8192)
+  identityToken!: string;
+
+  @ApiProperty({
+    description:
+      'Codigo de autorizacion de un solo uso (vale 5 minutos). El servidor lo canjea por el ' +
+      'refresh token con el que se revoca el acceso al borrar la cuenta.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2048)
+  authorizationCode!: string;
+
+  @ApiProperty({
+    description:
+      'El nonce **sin hashear** que genero la app. A Apple se le paso su SHA-256, que vuelve ' +
+      'dentro del token: si no coinciden, el token se esta reutilizando.',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  nonce!: string;
+
+  @ApiPropertyOptional({ description: 'Nombre de pila. Solo la primera autorizacion lo trae.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  givenName?: string;
+
+  @ApiPropertyOptional({ description: 'Apellido. Solo la primera autorizacion lo trae.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  familyName?: string;
+}
+
+/** Lo que Apple manda a `/auth/apple/notifications`: un JWS firmado por Apple. */
+export class AppleNotificationDto {
+  @ApiProperty({ description: 'JWS de Apple con el evento en el claim `events`.' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(16384)
+  payload!: string;
+}
+
 export class RefreshDto extends DeviceDto {
   @ApiProperty({ description: 'El refresh token entregado en el login o en el refresh anterior' })
   @IsString()
@@ -263,10 +322,17 @@ export class AuthUserDto {
 
   @ApiProperty({
     description:
-      'False en las cuentas que entraron con Google y nunca pusieron contrasena. ' +
+      'False en las cuentas que entraron con Google o Apple y nunca pusieron contrasena. ' +
       'La app no debe ofrecerles "cambiar contrasena": no hay una actual que pedir.',
   })
   hasPassword!: boolean;
+
+  @ApiProperty({
+    description:
+      'True si la cuenta esta vinculada a Sign in with Apple. La app lo muestra en Ajustes ' +
+      '("Usando Iniciar sesion con Apple"), como pide Apple.',
+  })
+  hasApple!: boolean;
 }
 
 export class AuthSessionResponseDto extends TokenPairDto {

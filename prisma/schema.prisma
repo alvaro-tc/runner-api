@@ -198,6 +198,18 @@ model User {
   /// usuario CI, contrasena CI). La app le exige cambiarla antes de dejarle
   /// hacer nada. Ver `docs/pago-qr-manual.md`.
   mustChangePassword Boolean   @default(false)
+  /// Sign in with Apple: el `sub` del identity token. Es **la** identidad de
+  /// Apple: estable para este equipo de desarrollo aunque el usuario oculte su
+  /// correo, deje de compartirlo o lo cambie. El email no sirve para eso — con
+  /// "Ocultar mi correo" es un relay de `privaterelay.appleid.com`.
+  appleSub           String?   @unique
+  /// Refresh token de Apple, canjeado con el codigo de autorizacion del login.
+  /// Solo sirve para **revocarlo** al borrar la cuenta, que Apple exige. No da
+  /// acceso a ningun dato del usuario.
+  appleRefreshToken  String?
+  /// El `client_id` (bundle ID) para el que se emitio ese token: Apple pide
+  /// revocarlo con el mismo con el que se canjeo.
+  appleClientId      String?
   name               String
   role               UserRole  @default(runner)
   emailVerifiedAt    DateTime?

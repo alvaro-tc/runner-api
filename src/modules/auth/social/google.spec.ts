@@ -5,6 +5,8 @@ import type { PrismaService } from '../../../database/prisma.service';
 import type { TokenService } from '../token.service';
 import type { MailService } from '../../mail/mail.service';
 import type { AppConfigService } from '../../../config/app-config.service';
+import type { AppleVerifier } from './apple.verifier';
+import type { AppleClient } from './apple.client';
 
 /**
  * Lo que aqui se prueba no es que Prisma escriba —eso lo cubren los e2e— sino
@@ -39,6 +41,8 @@ describe('AuthService.loginWithGoogle', () => {
       {} as MailService,
       {} as AppConfigService,
       google,
+      {} as AppleVerifier,
+      {} as AppleClient,
     );
 
     return { service, create, emitir };
@@ -129,9 +133,9 @@ describe('GoogleVerifier — audience', () => {
   it('rechaza un correo que Google no ha verificado', async () => {
     const verifier = crear(['web.apps.googleusercontent.com']);
     (verifier as unknown as { client: unknown }).client = {
-      verifyIdToken: jest
-        .fn()
-        .mockResolvedValue({ getPayload: () => ({ email: 'ana@corp.com', email_verified: false }) }),
+      verifyIdToken: jest.fn().mockResolvedValue({
+        getPayload: () => ({ email: 'ana@corp.com', email_verified: false }),
+      }),
     };
 
     await expect(verifier.verify('id-token')).rejects.toBeInstanceOf(AppException);

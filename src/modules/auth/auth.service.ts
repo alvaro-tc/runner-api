@@ -10,7 +10,10 @@ import { hashPassword } from './password';
 import { esCiValida, esEmail, normalizarCi } from './ci';
 import { DeviceInfo, TokenService } from './token.service';
 import { GoogleVerifier } from './social/google.verifier';
+import { AppleVerifier } from './social/apple.verifier';
+import { AppleClient } from './social/apple.client';
 import type {
+  AppleLoginDto,
   ChangePasswordDto,
   ForgotPasswordDto,
   LoginDto,
@@ -29,10 +32,17 @@ export interface UserPublic {
   role: string;
   mustChangePassword: boolean;
   onboardingSeenAt: string | null;
-  /// `false` en las cuentas que entraron con Google y nunca pusieron una. La
-  /// app lo necesita para no ofrecer "cambiar contrasena" a quien no tiene.
+  /// `false` en las cuentas que entraron con Google o Apple y nunca pusieron
+  /// una. La app lo necesita para no ofrecer "cambiar contrasena" a quien no
+  /// tiene.
   hasPassword: boolean;
+  /// La cuenta esta vinculada a Sign in with Apple. La app lo muestra en
+  /// Ajustes —"Usando Iniciar sesion con Apple"—, como pide la guia de Apple.
+  hasApple: boolean;
 }
+
+/** El dominio de "Ocultar mi correo": esa parte local es aleatoria, no un nombre. */
+const RELAY_DE_APPLE = '@privaterelay.appleid.com';
 
 @Injectable()
 export class AuthService {
@@ -44,6 +54,8 @@ export class AuthService {
     private readonly mail: MailService,
     private readonly config: AppConfigService,
     private readonly google: GoogleVerifier,
+    private readonly apple: AppleVerifier,
+    private readonly appleClient: AppleClient,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -181,6 +193,193 @@ export class AuthService {
       ...pair,
       user: this.toPublic(user, user.preferences?.onboardingSeenAt ?? null),
     };
+  }
+
+  /**
+   * Entra con Apple, creando la cuenta si es la primera vez.
+   *
+   * **La identidad es el `sub` de Apple**, no el email: con "Ocultar mi
+   * correo" el email es un relay que no coincide con nada, y el usuario puede
+   * dejar de compartirlo cuando quiera. Por eso, a diferencia de Google, aqui
+   * si se guarda un identificador de proveedor.
+   *
+   * El orden de busqueda es el que propone Apple para no duplicar cuentas:
+   * primero por `sub`; si no, por el email **verificado** que compartio —si es
+   * el real y ya tenia cuenta con el, se vincula a esa—; y solo si no hay
+   * ninguna, se crea. Un relay nunca coincide, asi que con correo oculto
+   * siempre es cuenta nueva.
+   *
+   * El nombre llega solo la primera vez y la cuenta se crea con el: Apple pide
+   * no volver a preguntar lo que ya se compartio. Sin nombre, se usa el del
+   * correo; con un relay —parte local aleatoria— uno neutro que el usuario
+   * cambia en su perfil cuando quiera.
+   *
+   * Cada login canjea el codigo de autorizacion por un refresh token. No da
+   * acceso a nada: es lo que permite **revocar** al borrar la cuenta, que es
+   * requisito de Apple. Si el canje falla se entra igual y queda en el log.
+   */
+  async loginWithApple(dto: AppleLoginDto, device: DeviceInfo) {
+    const apple = await this.apple.verifyIdentityToken(dto.identityToken, dto.nonce);
+
+    let user = await this.prisma.user.findUnique({
+      where: { appleSub: apple.sub },
+      include: { preferences: true },
+    });
+
+    // Vincular por correo solo con uno verificado por Apple. Es la misma regla
+    // que con Google: sin ella, entrar en la cuenta de otro seria tan facil
+    // como declarar su email.
+    if (!user && apple.email && apple.emailVerified) {
+      const porEmail = await this.prisma.user.findUnique({
+        where: { email: apple.email },
+        include: { preferences: true },
+      });
+      // Otra Apple Account ya ocupa esa cuenta: no se le cambia el dueno.
+      if (porEmail?.appleSub && porEmail.appleSub !== apple.sub) {
+        throw new AppException(
+          ErrorCode.EMAIL_ALREADY_REGISTERED,
+          'Esa cuenta ya esta vinculada a otra Apple Account',
+          HttpStatus.CONFLICT,
+        );
+      }
+      user = porEmail;
+    }
+
+    // Cuenta borrada: el email sigue ocupado hasta la purga diferida, asi que
+    // ni se reutiliza la fila ni se crea otra. Mismo error opaco que en login.
+    if (user?.deletedAt) {
+      throw new AppException(
+        ErrorCode.INVALID_CREDENTIALS,
+        'Email o contrasena incorrectos',
+        HttpStatus.UNAUTHORIZED,
+      );
+    }
+
+    if (!user) {
+      // Se piden nombre y correo en la autorizacion, asi que siempre llega uno:
+      // el real o el relay. Sin ninguno la cuenta no tendria por donde
+      // recuperarse ni con que identificarse fuera de Apple.
+      if (!apple.email) {
+        throw new AppException(
+          ErrorCode.INVALID_CREDENTIALS,
+          'Apple no compartio un correo para crear la cuenta',
+          HttpStatus.UNAUTHORIZED,
+        );
+      }
+
+      user = await this.prisma.user.create({
+        data: {
+          email: apple.email,
+          appleSub: apple.sub,
+          passwordHash: null,
+          name: this.nombreDeApple(dto, apple.email),
+          // Nadie le impuso una contrasena: no hay nada que forzarle a cambiar.
+          mustChangePassword: false,
+          profile: { create: {} },
+          preferences: { create: {} },
+        },
+        include: { preferences: true },
+      });
+    }
+
+    const refreshToken = await this.appleClient.exchangeCode(dto.authorizationCode, apple.clientId);
+
+    // Vincula (si llego por email) y guarda el token mas reciente. Uno nuevo
+    // sustituye al anterior: el viejo pudo morir con un cambio de contrasena
+    // de la Apple Account.
+    user = await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        appleSub: apple.sub,
+        ...(refreshToken ? { appleRefreshToken: refreshToken, appleClientId: apple.clientId } : {}),
+      },
+      include: { preferences: true },
+    });
+
+    const pair = await this.tokens.issueForNewSession(user.id, user.role, device);
+
+    return {
+      ...pair,
+      user: this.toPublic(user, user.preferences?.onboardingSeenAt ?? null),
+    };
+  }
+
+  /**
+   * Las notificaciones servidor a servidor de Apple: cambios que el usuario
+   * hace desde los ajustes de su Apple Account, fuera de la app.
+   *
+   * - `consent-revoked`: dejo de usar Sign in with Apple con CamRun. Sus
+   *   credenciales de Apple ya no valen, asi que se cierran sus sesiones —en
+   *   el telefono, la app ademas lo ve con `getCredentialState`— y se olvida
+   *   el token, que Apple ya invalido. El `sub` se queda: si vuelve a entrar con
+   *   Apple, es la misma persona y recupera su cuenta.
+   * - `account-deleted`: borro su Apple Account. Ese `sub` no volvera nunca, asi
+   *   que ademas se desvincula. La cuenta de CamRun no se borra sola: puede
+   *   tener contrasena, carreras pagadas o resultados; si quiere borrarla, lo
+   *   hace desde la app o la web.
+   * - `email-disabled` / `email-enabled`: cambio el reenvio de su correo
+   *   oculto. Solo se registra: el unico correo que manda CamRun es el de
+   *   recuperar contrasena, y lo pide el propio usuario.
+   */
+  async handleAppleNotification(payload: string): Promise<{ ok: true }> {
+    const evento = await this.apple.verifyNotification(payload);
+
+    const user = await this.prisma.user.findUnique({
+      where: { appleSub: evento.sub },
+      select: { id: true },
+    });
+
+    // Un `sub` que no conocemos —cuenta ya borrada, o de otro entorno— no es un
+    // error: Apple no tiene por que saberlo. Se responde 200 para que no
+    // reintente.
+    if (!user) {
+      this.logger.log(`Notificacion de Apple (${evento.type}) para un usuario que no existe`);
+      return { ok: true };
+    }
+
+    // `account-delete` es el nombre anterior del evento en la documentacion.
+    switch (evento.type) {
+      case 'consent-revoked':
+      case 'account-deleted':
+      case 'account-delete': {
+        const desvincular = evento.type !== 'consent-revoked';
+        await this.prisma.$transaction([
+          this.prisma.user.update({
+            where: { id: user.id },
+            data: {
+              appleRefreshToken: null,
+              appleClientId: null,
+              ...(desvincular ? { appleSub: null } : {}),
+            },
+          }),
+          this.prisma.authSession.updateMany({
+            where: { userId: user.id, revokedAt: null },
+            data: { revokedAt: new Date() },
+          }),
+        ]);
+        this.logger.log(`Apple: ${evento.type} para el usuario ${user.id}; sesiones cerradas`);
+        break;
+      }
+      case 'email-disabled':
+      case 'email-enabled':
+        this.logger.log(`Apple: ${evento.type} para el usuario ${user.id}`);
+        break;
+      default:
+        this.logger.warn(`Notificacion de Apple desconocida: ${evento.type}`);
+    }
+
+    return { ok: true };
+  }
+
+  /** El nombre para una cuenta nueva de Apple. */
+  private nombreDeApple(dto: AppleLoginDto, email: string): string {
+    const completo = [dto.givenName, dto.familyName]
+      .map((parte) => parte?.trim())
+      .filter(Boolean)
+      .join(' ');
+    if (completo) return completo;
+    if (email.toLowerCase().endsWith(RELAY_DE_APPLE)) return 'Corredor';
+    return email.split('@')[0] || 'Corredor';
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -367,6 +566,7 @@ export class AuthService {
       role: string;
       mustChangePassword: boolean;
       passwordHash: string | null;
+      appleSub: string | null;
     },
     onboardingSeenAt: Date | null,
   ): UserPublic {
@@ -379,6 +579,7 @@ export class AuthService {
       mustChangePassword: user.mustChangePassword,
       onboardingSeenAt: onboardingSeenAt?.toISOString() ?? null,
       hasPassword: user.passwordHash !== null,
+      hasApple: user.appleSub !== null,
     };
   }
 
@@ -460,13 +661,13 @@ export class AuthService {
       throw new AppException(ErrorCode.NOT_FOUND, 'Usuario no encontrado', HttpStatus.NOT_FOUND);
     }
 
-    // Cuenta de Google sin contrasena: no hay "actual" que comprobar. Decirlo
-    // en claro no filtra nada —quien pregunta ya esta autenticado como el— y
-    // evita el callejon de "la contrasena actual no es correcta" para siempre.
+    // Cuenta de Google o Apple sin contrasena: no hay "actual" que comprobar.
+    // Decirlo en claro no filtra nada —quien pregunta ya esta autenticado como
+    // el— y evita el callejon de "la contrasena actual no es correcta".
     if (!user.passwordHash) {
       throw new AppException(
         ErrorCode.NO_PASSWORD_SET,
-        'Esta cuenta entra con Google. Usa "olvide mi contrasena" para ponerle una.',
+        'Esta cuenta entra con Google o Apple. Usa "olvide mi contrasena" para ponerle una.',
         HttpStatus.CONFLICT,
       );
     }
