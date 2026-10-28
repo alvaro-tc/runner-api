@@ -384,6 +384,16 @@ export class MarathonFieldsDto {
 
   @ApiPropertyOptional({
     nullable: true,
+    type: String,
+    description:
+      'Solo `null`, para quitar el logo del QR. Se sube por `POST /admin/marathons/:id/logo/qr`.',
+  })
+  @IsOptional()
+  @IsIn([null])
+  logoQrUrl?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
     example: 'https://cdn.cam.org.bo/qr-maraton.png',
     description:
       'TEMPORAL — QR de cobro del organizador (se sube por `POST /admin/marathons/:id/qr`). **Sin esto la carrera no admite el metodo `qr_manual`.** ' +

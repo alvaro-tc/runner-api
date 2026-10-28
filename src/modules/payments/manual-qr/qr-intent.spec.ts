@@ -27,11 +27,19 @@ describe('intentoDeQrManual', () => {
     expect(intento.methodDetails.manualQr).toEqual({
       payload: base.qrPayload,
       imageUrl: base.qrImageUrl,
+      logoUrl: null,
       instructions: base.instructions,
       reference: base.reference,
     });
     // El `qr` del proveedor simulado tiene que quedar vacio: son dos cosas.
     expect(intento.methodDetails.qr).toBeUndefined();
+  });
+
+  it('lleva el logo del centro del QR cuando la maraton tiene uno', () => {
+    const logoUrl = 'https://api.test/uploads/logo/qr.webp';
+    const intento = intentoDeQrManual({ ...base, logoUrl });
+
+    expect(intento.methodDetails.manualQr?.logoUrl).toBe(logoUrl);
   });
 
   it('lleva el QR como texto aunque la maraton no tenga imagen subida', () => {

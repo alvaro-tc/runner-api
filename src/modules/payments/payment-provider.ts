@@ -56,6 +56,8 @@ export interface DetalleDeQrManual {
   payload: string;
   /** URL publica del QR de la maraton, si se subio como imagen. Respaldo. */
   imageUrl: string | null;
+  /** Logo que la app pinta en el centro del QR. `null` = QR liso. */
+  logoUrl: string | null;
   /** Instrucciones del organizador: a que cuenta llega, que glosa poner. */
   instructions: string | null;
   /** Glosa que identifica la inscripcion en el extracto del organizador. */

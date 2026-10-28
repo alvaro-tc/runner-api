@@ -414,6 +414,7 @@ export class AdminService {
           coverUrl: original.coverUrl,
           logoVerticalUrl: original.logoVerticalUrl,
           logoHorizontalUrl: original.logoHorizontalUrl,
+          logoQrUrl: original.logoQrUrl,
           preparingMessage: original.preparingMessage,
           rehearsalOfId: original.id,
           categories: {
@@ -1298,19 +1299,23 @@ export class AdminService {
   }
 
   /**
-   * Sube uno de los dos logos. WebP conserva la transparencia, que en un logo
+   * Sube uno de los logos (vertical, horizontal o el del centro del QR). WebP conserva la transparencia, que en un logo
    * es lo normal: la app lo pinta sobre su propio fondo.
    */
   async subirLogo(
     marathonId: string,
-    variante: 'vertical' | 'horizontal',
+    variante: 'vertical' | 'horizontal' | 'qr',
     archivo: { buffer: Buffer; size: number },
   ) {
     const clave = await this.guardarImagenDeMaraton(marathonId, archivo, 'logo');
 
     await this.prisma.marathon.update({
       where: { id: marathonId },
-      data: variante === 'vertical' ? { logoVerticalUrl: clave } : { logoHorizontalUrl: clave },
+      data: {
+        vertical: { logoVerticalUrl: clave },
+        horizontal: { logoHorizontalUrl: clave },
+        qr: { logoQrUrl: clave },
+      }[variante],
     });
 
     this.logger.log(`Logo ${variante} actualizado para la maraton ${marathonId}`);
@@ -1459,6 +1464,7 @@ export class AdminService {
       coverUrl: this.storage.publicUrl(maraton.coverUrl),
       logoVerticalUrl: this.storage.publicUrl(maraton.logoVerticalUrl),
       logoHorizontalUrl: this.storage.publicUrl(maraton.logoHorizontalUrl),
+      logoQrUrl: this.storage.publicUrl(maraton.logoQrUrl),
       rehearsalOfId: maraton.rehearsalOfId,
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
@@ -1796,6 +1802,7 @@ export class AdminService {
       'coverUrl',
       'logoVerticalUrl',
       'logoHorizontalUrl',
+      'logoQrUrl',
     ]);
 
     if (dto.startsAt !== undefined) datos.startsAt = new Date(dto.startsAt);

@@ -351,17 +351,17 @@ export class AdminController {
     },
   })
   @ApiOperation({
-    summary: 'Subir el logo vertical u horizontal de la maratón',
+    summary: 'Subir el logo vertical, horizontal o del QR de la maratón',
     description:
-      'Reemplaza `logoVerticalUrl` o `logoHorizontalUrl`. PNG con transparencia recomendado: ' +
+      'Reemplaza `logoVerticalUrl`, `logoHorizontalUrl` o `logoQrUrl` (el que la app pinta en el centro del QR de cobro). PNG con transparencia recomendado: ' +
       'se reencoda a WebP y la transparencia se conserva. La app elige el logo por la forma ' +
       'del hueco donde lo pinta.',
   })
   @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
   subirLogo(
     @Param('id') id: string,
-    @Param('variant', new ParseEnumPipe({ vertical: 'vertical', horizontal: 'horizontal' }))
-    variant: 'vertical' | 'horizontal',
+    @Param('variant', new ParseEnumPipe({ vertical: 'vertical', horizontal: 'horizontal', qr: 'qr' }))
+    variant: 'vertical' | 'horizontal' | 'qr',
     @UploadedFile() file?: Express.Multer.File,
   ) {
     if (!file?.buffer?.length) {

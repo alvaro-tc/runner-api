@@ -925,7 +925,12 @@ export class PaymentsService {
   ) {
     const maraton = await this.prisma.marathon.findUniqueOrThrow({
       where: { id: marathonId },
-      select: { paymentQrUrl: true, paymentQrInstructions: true, paymentQrPayload: true },
+      select: {
+        paymentQrUrl: true,
+        paymentQrInstructions: true,
+        paymentQrPayload: true,
+        logoQrUrl: true,
+      },
     });
 
     // El texto es lo que habilita el metodo: la app dibuja el codigo con el.
@@ -946,6 +951,7 @@ export class PaymentsService {
       currency: cotizacion.currency,
       qrPayload,
       qrImageUrl: this.storage.publicUrl(maraton.paymentQrUrl),
+      logoUrl: this.storage.publicUrl(maraton.logoQrUrl),
       instructions: maraton.paymentQrInstructions,
       reference: glosaDe(registrationId),
       ttlHoras: this.config.get('PAYMENT_PROOF_TTL_HOURS'),

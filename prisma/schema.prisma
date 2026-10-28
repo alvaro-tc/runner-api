@@ -517,6 +517,8 @@ model Marathon {
   /// elige por la forma del hueco y cae al otro, y luego a `coverUrl`.
   logoVerticalUrl   String?
   logoHorizontalUrl String?
+  /// Logo del centro del QR de cobro. Cuadrado; la app lo pinta sobre el QR.
+  logoQrUrl         String?
 
   /// No nulo = esta maraton es un **ensayo** de otra: una copia privada para
   /// probar preparacion, largada y corte con inscritos de prueba sin bloquear

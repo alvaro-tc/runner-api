@@ -26,6 +26,8 @@ export function intentoDeQrManual(entrada: {
   qrPayload: string;
   /** URL publica del QR, ya resuelta por `StorageService.publicUrl()`. */
   qrImageUrl: string | null;
+  /** Logo que la app pinta en el centro del QR. URL publica o `null`. */
+  logoUrl?: string | null;
   instructions: string | null;
   /** Glosa. Se arma de la inscripcion para que sea corta y unica. */
   reference: string;
@@ -44,6 +46,7 @@ export function intentoDeQrManual(entrada: {
       manualQr: {
         payload: entrada.qrPayload,
         imageUrl: entrada.qrImageUrl,
+        logoUrl: entrada.logoUrl ?? null,
         instructions: entrada.instructions,
         reference: entrada.reference,
       },
