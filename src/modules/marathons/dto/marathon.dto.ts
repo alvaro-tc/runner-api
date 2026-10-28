@@ -121,6 +121,12 @@ export class MarathonSummaryDto {
   @ApiProperty({ nullable: true })
   coverUrl!: string | null;
 
+  @ApiProperty({ nullable: true, description: 'Logo en vertical (afiche de Home)' })
+  logoVerticalUrl!: string | null;
+
+  @ApiProperty({ nullable: true, description: 'Logo en horizontal (tarjetas y cabeceras)' })
+  logoHorizontalUrl!: string | null;
+
   @ApiProperty({
     nullable: true,
     description:

@@ -53,6 +53,12 @@ export class RaceMarathonDto {
   @ApiProperty({ nullable: true })
   coverUrl!: string | null;
 
+  @ApiProperty({ nullable: true })
+  logoVerticalUrl!: string | null;
+
+  @ApiProperty({ nullable: true })
+  logoHorizontalUrl!: string | null;
+
   @ApiProperty({
     nullable: true,
     description: 'Retiro de kit: `{ from, to, address, lat, lng }`. Solo en las próximas.',

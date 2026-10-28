@@ -32,6 +32,8 @@ const MARATON_DE_LA_CARRERA = {
   distanceMeters: true,
   laps: true,
   coverUrl: true,
+  logoVerticalUrl: true,
+  logoHorizontalUrl: true,
   kitPickup: true,
   preparingAt: true,
   preparingMessage: true,
@@ -526,6 +528,8 @@ export class RacesService {
         ...carrera.marathon,
         startsAt: carrera.marathon.startsAt.toISOString(),
         coverUrl: this.storage.publicUrl(carrera.marathon.coverUrl),
+        logoVerticalUrl: this.storage.publicUrl(carrera.marathon.logoVerticalUrl),
+        logoHorizontalUrl: this.storage.publicUrl(carrera.marathon.logoHorizontalUrl),
         // La largada real. Con esto la app sabe, al abrirse, si tiene que estar
         // en la pantalla de carrera aunque se haya perdido el aviso del socket.
         liveStartedAt: carrera.marathon.liveStartedAt?.toISOString() ?? null,

@@ -1107,11 +1107,32 @@ export class AdminService {
     return this.detalleMaraton(marathonId);
   }
 
+  /**
+   * Sube uno de los dos logos. WebP conserva la transparencia, que en un logo
+   * es lo normal: la app lo pinta sobre su propio fondo.
+   */
+  async subirLogo(
+    marathonId: string,
+    variante: 'vertical' | 'horizontal',
+    archivo: { buffer: Buffer; size: number },
+  ) {
+    const clave = await this.guardarImagenDeMaraton(marathonId, archivo, 'logo');
+
+    await this.prisma.marathon.update({
+      where: { id: marathonId },
+      data: variante === 'vertical' ? { logoVerticalUrl: clave } : { logoHorizontalUrl: clave },
+    });
+
+    this.logger.log(`Logo ${variante} actualizado para la maraton ${marathonId}`);
+
+    return this.detalleMaraton(marathonId);
+  }
+
   /** Valida, reencoda y guarda; devuelve la CLAVE de storage, nunca la URL. */
   private async guardarImagenDeMaraton(
     marathonId: string,
     archivo: { buffer: Buffer; size: number },
-    carpeta: 'qr' | 'cover',
+    carpeta: 'qr' | 'cover' | 'logo',
   ): Promise<string> {
     await this.buscarMaraton(marathonId);
 
@@ -1234,6 +1255,8 @@ export class AdminService {
       // Igual que el QR: el panel pinta una vista previa y una clave de
       // storage relativa no le sirve.
       coverUrl: this.storage.publicUrl(maraton.coverUrl),
+      logoVerticalUrl: this.storage.publicUrl(maraton.logoVerticalUrl),
+      logoHorizontalUrl: this.storage.publicUrl(maraton.logoHorizontalUrl),
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
       // en una vista previa y una clave de storage relativa no le sirve.
@@ -1565,6 +1588,11 @@ export class AdminService {
       'paymentQrUrl',
       'paymentQrInstructions',
       'paymentQrPayload',
+      // Solo para quitarlas: el DTO no admite mas que `null`, subir va por su
+      // endpoint.
+      'coverUrl',
+      'logoVerticalUrl',
+      'logoHorizontalUrl',
     ]);
 
     if (dto.startsAt !== undefined) datos.startsAt = new Date(dto.startsAt);

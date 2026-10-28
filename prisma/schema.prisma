@@ -511,6 +511,12 @@ model Marathon {
   /// Retiro de kit: `{ from, to, address, lat, lng }`.
   kitPickup    Json?
   coverUrl     String?
+  /// Logos de la carrera (clave de storage, como `coverUrl`). Dos formas
+  /// porque un solo archivo nunca encaja en todos los huecos: el vertical va
+  /// en el afiche de Home y el horizontal en tarjetas y cabeceras. La app
+  /// elige por la forma del hueco y cae al otro, y luego a `coverUrl`.
+  logoVerticalUrl   String?
+  logoHorizontalUrl String?
 
   /// TEMPORAL — QR de cobro del organizador (clave de storage o URL absoluta,
   /// igual que `coverUrl`). Sin esto la maraton no admite `qr_manual`.

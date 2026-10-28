@@ -7,6 +7,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseEnumPipe,
   Post,
   Put,
   Query,
@@ -336,6 +337,41 @@ export class AdminController {
     }
 
     return this.admin.subirAfiche(id, file);
+  }
+
+  @Post('marathons/:id/logo/:variant')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['file'],
+      properties: { file: { type: 'string', format: 'binary' } },
+    },
+  })
+  @ApiOperation({
+    summary: 'Subir el logo vertical u horizontal de la maratón',
+    description:
+      'Reemplaza `logoVerticalUrl` o `logoHorizontalUrl`. PNG con transparencia recomendado: ' +
+      'se reencoda a WebP y la transparencia se conserva. La app elige el logo por la forma ' +
+      'del hueco donde lo pinta.',
+  })
+  @ApiResponse({ status: 415, type: ErrorResponseDto, description: 'INVALID_IMAGE' })
+  subirLogo(
+    @Param('id') id: string,
+    @Param('variant', new ParseEnumPipe({ vertical: 'vertical', horizontal: 'horizontal' }))
+    variant: 'vertical' | 'horizontal',
+    @UploadedFile() file?: Express.Multer.File,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Falta el archivo en el campo `file`, o llego vacio',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    return this.admin.subirLogo(id, variant, file);
   }
 
   @Delete('marathons/:id')

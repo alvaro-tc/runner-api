@@ -5,6 +5,7 @@ import {
   IsBoolean,
   IsEmail,
   IsEnum,
+  IsIn,
   IsISO8601,
   IsInt,
   IsNotEmpty,
@@ -348,6 +349,33 @@ export class MarathonFieldsDto {
   @IsOptional()
   @IsISO8601()
   registrationClosesAt?: string | null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Solo `null`, para quitar el afiche. Se sube por `POST /admin/marathons/:id/cover`.',
+  })
+  @IsOptional()
+  @IsIn([null])
+  coverUrl?: null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/vertical`.',
+  })
+  @IsOptional()
+  @IsIn([null])
+  logoVerticalUrl?: null;
+
+  @ApiPropertyOptional({
+    nullable: true,
+    description:
+      'Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/horizontal`.',
+  })
+  @IsOptional()
+  @IsIn([null])
+  logoHorizontalUrl?: null;
 
   @ApiPropertyOptional({
     nullable: true,

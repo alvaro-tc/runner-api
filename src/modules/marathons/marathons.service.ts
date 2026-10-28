@@ -30,6 +30,8 @@ const CAMPOS_RESUMEN = {
   priceCents: true,
   currency: true,
   coverUrl: true,
+  logoVerticalUrl: true,
+  logoHorizontalUrl: true,
   paymentQrUrl: true,
   paymentQrInstructions: true,
   paymentQrPayload: true,
@@ -267,6 +269,8 @@ export class MarathonsService {
       // El afiche es lo que la app pinta en Home; sale siempre como URL
       // cargable, venga de storage o del sitio del organizador.
       coverUrl: this.storage.publicUrl(maraton.coverUrl),
+      logoVerticalUrl: this.storage.publicUrl(maraton.logoVerticalUrl),
+      logoHorizontalUrl: this.storage.publicUrl(maraton.logoHorizontalUrl),
       // TEMPORAL — cobro por QR manual. La app decide con esto si ofrece el
       // metodo: sin QR cargado, ofrecerlo seria prometer un pago imposible.
       paymentQrUrl: this.storage.publicUrl(maraton.paymentQrUrl),
