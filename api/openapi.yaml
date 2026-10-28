@@ -1,5 +1,93 @@
 openapi: 3.0.0
 paths:
+  /api/v1/notifications:
+    get:
+      operationId: NotificationsController_list
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Mis notificaciones (las 50 ultimas) y cuantas no lei
+      tags:
+        - notifications
+  /api/v1/notifications/read-all:
+    post:
+      operationId: NotificationsController_markAllRead
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      security:
+        - access-token: []
+      summary: Marcar todas como leidas
+      tags:
+        - notifications
+  /api/v1/notifications/read:
+    delete:
+      operationId: NotificationsController_removeRead
+      parameters: []
+      responses:
+        '204':
+          description: ''
+      security:
+        - access-token: []
+      summary: Borrar todas las ya leidas
+      tags:
+        - notifications
+  /api/v1/notifications/{id}:
+    delete:
+      operationId: NotificationsController_remove
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '204':
+          description: ''
+      security:
+        - access-token: []
+      summary: Borrar una
+      tags:
+        - notifications
+  /api/v1/notifications/push-token:
+    put:
+      operationId: NotificationsController_setPushToken
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PushTokenDto'
+      responses:
+        '204':
+          description: ''
+      security:
+        - access-token: []
+      summary: Registra el token de FCM de este telefono
+      tags:
+        - notifications
+  /api/v1/notifications/{id}/read:
+    post:
+      operationId: NotificationsController_markRead
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '204':
+          description: ''
+      security:
+        - access-token: []
+      summary: Marcar una como leida
+      tags:
+        - notifications
   /api/v1/auth/register:
     post:
       operationId: AuthController_register
@@ -85,6 +173,75 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponseDto'
       summary: Entra con Google; crea la cuenta si el correo no tenia una
+      tags:
+        - auth
+  /api/v1/auth/apple:
+    post:
+      description: >-
+        Recibe la credencial de Sign in with Apple del telefono: identity token, codigo de
+        autorizacion, el nonce sin hashear y —solo la primera vez— el nombre. Verifica el token
+        contra las claves publicas de Apple, canjea el codigo por el refresh token que se revoca al
+        borrar la cuenta y devuelve el mismo par de tokens que /auth/login.
+      operationId: AuthController_apple
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleLoginDto'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponseDto'
+        '401':
+          description: INVALID_CREDENTIALS
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '409':
+          description: 'EMAIL_ALREADY_REGISTERED: ese correo ya esta vinculado a otra Apple Account'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+        '503':
+          description: 'SERVICE_UNAVAILABLE: falta APPLE_CLIENT_IDS en el entorno'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      summary: Entra con Apple; crea la cuenta si es la primera vez
+      tags:
+        - auth
+  /api/v1/auth/apple/notifications:
+    post:
+      description: >-
+        Apple avisa aqui cuando el usuario deja de usar Sign in with Apple con la app
+        (consent-revoked), borra su Apple Account (account-deleted) o cambia el reenvio de su correo
+        oculto (email-enabled / email-disabled). El cuerpo es un JWS firmado por Apple.
+      operationId: AuthController_appleNotifications
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleNotificationDto'
+      responses:
+        '200':
+          description: Notificacion procesada
+        '401':
+          description: Firma o emisor invalidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      summary: Notificaciones servidor a servidor de Sign in with Apple
       tags:
         - auth
   /api/v1/auth/refresh:
@@ -2913,6 +3070,48 @@ paths:
       summary: Subir el afiche promocional de la maratón
       tags:
         - admin
+  /api/v1/admin/marathons/{id}/logo/{variant}:
+    post:
+      description: >-
+        Reemplaza `logoVerticalUrl` o `logoHorizontalUrl`. PNG con transparencia recomendado: se
+        reencoda a WebP y la transparencia se conserva. La app elige el logo por la forma del hueco
+        donde lo pinta.
+      operationId: AdminController_subirLogo
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+        - name: variant
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '415':
+          description: INVALID_IMAGE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Subir el logo vertical u horizontal de la maratón
+      tags:
+        - admin
   /api/v1/admin/marathons/{id}/categories:
     post:
       operationId: AdminController_crearCategoria
@@ -3318,6 +3517,12 @@ paths:
               - failed
               - refunded
             type: string
+        - name: q
+          required: false
+          in: query
+          description: Busca por nombre, CI, celular, email, dorsal o número de transacción
+          schema:
+            type: string
         - name: page
           required: false
           in: query
@@ -3349,6 +3554,26 @@ paths:
       security:
         - access-token: []
       summary: Cobros esperando confirmación manual
+      tags:
+        - admin
+  /api/v1/admin/payments/{id}:
+    get:
+      description: >-
+        La misma fila que `GET /admin/payments`. La usa la app para abrir la ficha desde un aviso
+        sin buscar el cobro en la cola.
+      operationId: AdminController_pago
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Un ticket por id
       tags:
         - admin
   /api/v1/admin/payments/{id}/confirm-transfer:
@@ -3740,6 +3965,55 @@ paths:
       summary: Estado de la inscripcion y del comprobante
       tags:
         - public
+  /api/v1/config/app/apk:
+    get:
+      description: >-
+        Redirige (302) al último APK subido. Es la URL estable del QR y del botón de la web: cada
+        subida lleva nombre nuevo porque `/uploads` se cachea como inmutable.
+      operationId: AppInfoController_descargarApk
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      summary: Descargar el APK de Android más reciente
+      tags:
+        - config
+    post:
+      description: 'Reemplaza al anterior: `GET /config/app/apk` pasa a apuntar a este.'
+      operationId: AppInfoController_subirApk
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        '201':
+          description: ''
+      security:
+        - access-token: []
+      summary: Publicar una versión nueva del APK
+      tags:
+        - config
+  /api/v1/config/app/apk/info:
+    get:
+      operationId: AppInfoController_infoApk
+      parameters: []
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Datos del APK publicado (o null si no hay)
+      tags:
+        - config
   /api/v1/config/app:
     get:
       description: >-
@@ -3809,6 +4083,18 @@ components:
       type: http
       description: El `ingestToken` que devuelve POST /workouts/sessions
   schemas:
+    PushTokenDto:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          description: El mismo `deviceId` que se manda al iniciar sesion
+        token:
+          type: string
+          description: Token de FCM de esta instalacion
+      required:
+        - deviceId
+        - token
     RegisterDto:
       type: object
       properties:
@@ -3889,8 +4175,13 @@ components:
         hasPassword:
           type: boolean
           description: >-
-            False en las cuentas que entraron con Google y nunca pusieron contrasena. La app no debe
-            ofrecerles "cambiar contrasena": no hay una actual que pedir.
+            False en las cuentas que entraron con Google o Apple y nunca pusieron contrasena. La app
+            no debe ofrecerles "cambiar contrasena": no hay una actual que pedir.
+        hasApple:
+          type: boolean
+          description: >-
+            True si la cuenta esta vinculada a Sign in with Apple. La app lo muestra en Ajustes
+            ("Usando Iniciar sesion con Apple"), como pide Apple.
       required:
         - id
         - email
@@ -3900,6 +4191,7 @@ components:
         - mustChangePassword
         - onboardingSeenAt
         - hasPassword
+        - hasApple
     AuthSessionResponseDto:
       type: object
       properties:
@@ -4013,6 +4305,50 @@ components:
       required:
         - deviceId
         - idToken
+    AppleLoginDto:
+      type: object
+      properties:
+        deviceId:
+          type: string
+          example: 9f1c8d2e-4b7a-4c11-9f3e-2a1b5c6d7e8f
+        deviceName:
+          type: string
+          example: Pixel 8 de Alvaro
+        platform:
+          type: string
+          example: android
+        identityToken:
+          type: string
+          description: Identity token de Apple (JWT firmado por appleid.apple.com).
+        authorizationCode:
+          type: string
+          description: >-
+            Codigo de autorizacion de un solo uso (vale 5 minutos). El servidor lo canjea por el
+            refresh token con el que se revoca el acceso al borrar la cuenta.
+        nonce:
+          type: string
+          description: >-
+            El nonce **sin hashear** que genero la app. A Apple se le paso su SHA-256, que vuelve
+            dentro del token: si no coinciden, el token se esta reutilizando.
+        givenName:
+          type: string
+          description: Nombre de pila. Solo la primera autorizacion lo trae.
+        familyName:
+          type: string
+          description: Apellido. Solo la primera autorizacion lo trae.
+      required:
+        - deviceId
+        - identityToken
+        - authorizationCode
+        - nonce
+    AppleNotificationDto:
+      type: object
+      properties:
+        payload:
+          type: string
+          description: JWS de Apple con el evento en el claim `events`.
+      required:
+        - payload
     RefreshDto:
       type: object
       properties:
@@ -4839,7 +5175,17 @@ components:
         distanceMeters:
           type: number
           example: 42195
-          description: Metros
+          description: Metros. El **total** que corre el inscrito
+        laps:
+          type: number
+          example: 5
+          description: >-
+            Vueltas al circuito. 1 = el recorrido se hace una vez. Mayor que 1 = `routeGeoJson` es
+            *una* vuelta y hay que repetirla.
+        lapDistanceMeters:
+          type: number
+          example: 8439
+          description: 'Metros de una vuelta: `distanceMeters / laps`'
         priceCents:
           type: number
           example: 25000
@@ -4850,6 +5196,14 @@ components:
         coverUrl:
           type: object
           nullable: true
+        logoVerticalUrl:
+          type: object
+          nullable: true
+          description: Logo en vertical (afiche de Home)
+        logoHorizontalUrl:
+          type: object
+          nullable: true
+          description: Logo en horizontal (tarjetas y cabeceras)
         paymentQrUrl:
           type: object
           nullable: true
@@ -4895,9 +5249,13 @@ components:
         - city
         - country
         - distanceMeters
+        - laps
+        - lapDistanceMeters
         - priceCents
         - currency
         - coverUrl
+        - logoVerticalUrl
+        - logoHorizontalUrl
         - paymentQrUrl
         - paymentQrInstructions
         - paymentQrPayload
@@ -4993,7 +5351,17 @@ components:
         distanceMeters:
           type: number
           example: 42195
-          description: Metros
+          description: Metros. El **total** que corre el inscrito
+        laps:
+          type: number
+          example: 5
+          description: >-
+            Vueltas al circuito. 1 = el recorrido se hace una vez. Mayor que 1 = `routeGeoJson` es
+            *una* vuelta y hay que repetirla.
+        lapDistanceMeters:
+          type: number
+          example: 8439
+          description: 'Metros de una vuelta: `distanceMeters / laps`'
         priceCents:
           type: number
           example: 25000
@@ -5004,6 +5372,14 @@ components:
         coverUrl:
           type: object
           nullable: true
+        logoVerticalUrl:
+          type: object
+          nullable: true
+          description: Logo en vertical (afiche de Home)
+        logoHorizontalUrl:
+          type: object
+          nullable: true
+          description: Logo en horizontal (tarjetas y cabeceras)
         paymentQrUrl:
           type: object
           nullable: true
@@ -5088,9 +5464,13 @@ components:
         - city
         - country
         - distanceMeters
+        - laps
+        - lapDistanceMeters
         - priceCents
         - currency
         - coverUrl
+        - logoVerticalUrl
+        - logoHorizontalUrl
         - paymentQrUrl
         - paymentQrInstructions
         - paymentQrPayload
@@ -6599,7 +6979,18 @@ components:
         distanceMeters:
           type: number
           example: 42195
+          description: Total que se corre, vueltas incluidas
+        laps:
+          type: number
+          example: 1
+          description: Vueltas al circuito. 1 = el trazado es la carrera entera.
         coverUrl:
+          type: object
+          nullable: true
+        logoVerticalUrl:
+          type: object
+          nullable: true
+        logoHorizontalUrl:
           type: object
           nullable: true
         kitPickup:
@@ -6614,7 +7005,10 @@ components:
         - startsAt
         - timezone
         - distanceMeters
+        - laps
         - coverUrl
+        - logoVerticalUrl
+        - logoHorizontalUrl
         - kitPickup
     RaceResultDto:
       type: object
@@ -7000,7 +7394,17 @@ components:
         distanceMeters:
           type: number
           example: 42195
-          description: Metros
+          description: Metros. El **total** que corre el inscrito
+        laps:
+          type: number
+          example: 5
+          description: >-
+            Vueltas al circuito. 1 = el recorrido se hace una vez. Mayor que 1 = `routeGeoJson` es
+            *una* vuelta y hay que repetirla.
+        lapDistanceMeters:
+          type: number
+          example: 8439
+          description: 'Metros de una vuelta: `distanceMeters / laps`'
         priceCents:
           type: number
           example: 25000
@@ -7011,6 +7415,14 @@ components:
         coverUrl:
           type: object
           nullable: true
+        logoVerticalUrl:
+          type: object
+          nullable: true
+          description: Logo en vertical (afiche de Home)
+        logoHorizontalUrl:
+          type: object
+          nullable: true
+          description: Logo en horizontal (tarjetas y cabeceras)
         paymentQrUrl:
           type: object
           nullable: true
@@ -7067,9 +7479,13 @@ components:
         - city
         - country
         - distanceMeters
+        - laps
+        - lapDistanceMeters
         - priceCents
         - currency
         - coverUrl
+        - logoVerticalUrl
+        - logoHorizontalUrl
         - paymentQrUrl
         - paymentQrInstructions
         - paymentQrPayload
@@ -7474,8 +7890,17 @@ components:
           type: number
           example: 42195
           description: >-
-            Metros. Opcional **solo** si se manda `routeId`: en ese caso la distancia se mide sobre
-            la geometría del recorrido, que es la que dibuja el mapa. Sin recorrido es obligatorio.
+            Metros de una vuelta. Opcional **solo** si se manda `routeId`: en ese caso la distancia
+            se mide sobre la geometría del recorrido, que es la que dibuja el mapa. Sin recorrido es
+            obligatorio.
+        laps:
+          type: number
+          example: 5
+          default: 1
+          description: >-
+            Vueltas al circuito. 1 = punto a punto o ida y vuelta. Mayor que 1 = **circuito**: el
+            recorrido cargado es *una* vuelta y el corredor la repite; la llegada se detecta al
+            cerrar la ultima, no la primera.
         capacity:
           type: number
           example: 2000
@@ -7501,6 +7926,20 @@ components:
           type: object
           nullable: true
           description: Null = las inscripciones cierran al largar
+        coverUrl:
+          type: string
+          nullable: true
+          description: Solo `null`, para quitar el afiche. Se sube por `POST /admin/marathons/:id/cover`.
+        logoVerticalUrl:
+          type: string
+          nullable: true
+          description: Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/vertical`.
+        logoHorizontalUrl:
+          type: string
+          nullable: true
+          description: >-
+            Solo `null`, para quitar el logo. Se sube por `POST
+            /admin/marathons/:id/logo/horizontal`.
         paymentQrUrl:
           type: object
           nullable: true
@@ -7601,7 +8040,18 @@ components:
         distanceMeters:
           type: number
           example: 42195
-          description: Metros
+          description: >-
+            Metros de **una vuelta** (con `laps: 1`, que es lo normal, es la carrera entera). El
+            total que corre el inscrito lo calcula la API: `distanceMeters * laps`, y es lo que
+            devuelve en `distanceMeters`.
+        laps:
+          type: number
+          example: 5
+          default: 1
+          description: >-
+            Vueltas al circuito. 1 = punto a punto o ida y vuelta. Mayor que 1 = **circuito**: el
+            recorrido cargado es *una* vuelta y el corredor la repite; la llegada se detecta al
+            cerrar la ultima, no la primera.
         capacity:
           type: number
           example: 2000
@@ -7627,6 +8077,20 @@ components:
           type: object
           nullable: true
           description: Null = las inscripciones cierran al largar
+        coverUrl:
+          type: string
+          nullable: true
+          description: Solo `null`, para quitar el afiche. Se sube por `POST /admin/marathons/:id/cover`.
+        logoVerticalUrl:
+          type: string
+          nullable: true
+          description: Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/vertical`.
+        logoHorizontalUrl:
+          type: string
+          nullable: true
+          description: >-
+            Solo `null`, para quitar el logo. Se sube por `POST
+            /admin/marathons/:id/logo/horizontal`.
         paymentQrUrl:
           type: object
           nullable: true

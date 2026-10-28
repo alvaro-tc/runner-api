@@ -352,30 +352,33 @@ export class MarathonFieldsDto {
 
   @ApiPropertyOptional({
     nullable: true,
+    type: String,
     description:
       'Solo `null`, para quitar el afiche. Se sube por `POST /admin/marathons/:id/cover`.',
   })
   @IsOptional()
   @IsIn([null])
-  coverUrl?: null;
+  coverUrl?: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
+    type: String,
     description:
       'Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/vertical`.',
   })
   @IsOptional()
   @IsIn([null])
-  logoVerticalUrl?: null;
+  logoVerticalUrl?: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
+    type: String,
     description:
       'Solo `null`, para quitar el logo. Se sube por `POST /admin/marathons/:id/logo/horizontal`.',
   })
   @IsOptional()
   @IsIn([null])
-  logoHorizontalUrl?: null;
+  logoHorizontalUrl?: string | null;
 
   @ApiPropertyOptional({
     nullable: true,
