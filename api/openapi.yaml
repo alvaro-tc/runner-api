@@ -3280,6 +3280,59 @@ paths:
       summary: Sacarla del catálogo
       tags:
         - admin
+  /api/v1/admin/marathons/{id}/rehearsal:
+    post:
+      description: >-
+        Copia privada (sin publicar, inscripciones cerradas) con logos, recorrido, programa,
+        categorías y extras, e inscritos **de prueba** ya confirmados: las cuentas de `emails`.
+        Sirve para probar preparación, largada y corte sin bloquear la app de los inscritos reales.
+        Se reinicia con `reset-live` y se borra con `DELETE`, aunque tenga inscritos.
+      operationId: AdminController_crearEnsayo
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRehearsalDto'
+      responses:
+        '400':
+          description: Algún email sin cuenta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponseDto'
+      security:
+        - access-token: []
+      summary: Crear un ensayo de la maratón
+      tags:
+        - admin
+  /api/v1/admin/marathons/{id}/reset-live:
+    post:
+      description: >-
+        Quita preparación, largada y corte, y lo anuncia: los móviles de los inscritos se liberan.
+        En un **ensayo** borra además sesiones, entrenos y resultados de la prueba para repetirla
+        desde cero; en una carrera real solo toca las tres fechas.
+      operationId: AdminController_reiniciar
+      parameters:
+        - name: id
+          required: true
+          in: path
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+      security:
+        - access-token: []
+      summary: Reiniciar el estado en vivo
+      tags:
+        - admin
   /api/v1/admin/marathons/{id}/prepare:
     post:
       description: >-
@@ -8234,6 +8287,18 @@ components:
           type: object
           nullable: true
           description: Null = sin límite, no agotado
+    CreateRehearsalDto:
+      type: object
+      properties:
+        emails:
+          example:
+            - prueba1@camrun.app
+            - prueba2@camrun.app
+          type: array
+          items:
+            type: string
+      required:
+        - emails
     PrepareMarathonDto:
       type: object
       properties:

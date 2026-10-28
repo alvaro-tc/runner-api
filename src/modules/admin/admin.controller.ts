@@ -53,6 +53,7 @@ import {
   ImportResultsResponseDto,
   ListUsersQueryDto,
   PrepareMarathonDto,
+  CreateRehearsalDto,
   RefundPaymentDto,
   ServiceFeeConfigDto,
   SetPasswordDto,
@@ -454,6 +455,33 @@ export class AdminController {
   }
 
   // ─── Largada en vivo ─────────────────────────────────────────────────────
+
+  @Post('marathons/:id/rehearsal')
+  @ApiOperation({
+    summary: 'Crear un ensayo de la maratón',
+    description:
+      'Copia privada (sin publicar, inscripciones cerradas) con logos, recorrido, programa, ' +
+      'categorías y extras, e inscritos **de prueba** ya confirmados: las cuentas de `emails`. ' +
+      'Sirve para probar preparación, largada y corte sin bloquear la app de los inscritos ' +
+      'reales. Se reinicia con `reset-live` y se borra con `DELETE`, aunque tenga inscritos.',
+  })
+  @ApiResponse({ status: 400, type: ErrorResponseDto, description: 'Algún email sin cuenta' })
+  crearEnsayo(@Param('id') id: string, @Body() dto: CreateRehearsalDto) {
+    return this.admin.crearEnsayo(id, dto.emails);
+  }
+
+  @Post('marathons/:id/reset-live')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Reiniciar el estado en vivo',
+    description:
+      'Quita preparación, largada y corte, y lo anuncia: los móviles de los inscritos se ' +
+      'liberan. En un **ensayo** borra además sesiones, entrenos y resultados de la prueba ' +
+      'para repetirla desde cero; en una carrera real solo toca las tres fechas.',
+  })
+  reiniciar(@Param('id') id: string) {
+    return this.admin.reiniciarEnVivo(id);
+  }
 
   @Post('marathons/:id/prepare')
   @HttpCode(HttpStatus.OK)

@@ -146,7 +146,7 @@ export class MarathonsService {
     const ahora = new Date();
 
     const maraton = await this.prisma.marathon.findFirst({
-      where: { ...this.visibles(ahora), id },
+      where: { AND: [this.visiblesPorId(ahora), { id }] },
       select: CAMPOS_RESUMEN,
     });
 
@@ -157,7 +157,7 @@ export class MarathonsService {
     const ahora = new Date();
 
     const maraton = await this.prisma.marathon.findFirst({
-      where: { ...this.visibles(ahora), OR: [{ slug: slugOId }, { id: slugOId }] },
+      where: { AND: [this.visiblesPorId(ahora), { OR: [{ slug: slugOId }, { id: slugOId }] }] },
       include: {
         categories: { orderBy: { extraPriceCents: 'asc' } },
         extras: { orderBy: { priceCents: 'asc' } },
@@ -210,7 +210,7 @@ export class MarathonsService {
     const ahora = new Date();
 
     const maraton = await this.prisma.marathon.findFirst({
-      where: { ...this.visibles(ahora), OR: [{ slug: slugOId }, { id: slugOId }] },
+      where: { AND: [this.visiblesPorId(ahora), { OR: [{ slug: slugOId }, { id: slugOId }] }] },
       include,
     });
 
@@ -227,6 +227,16 @@ export class MarathonsService {
    */
   private visibles(ahora: Date): Prisma.MarathonWhereInput {
     return { publishedAt: { not: null, lte: ahora } };
+  }
+
+  /**
+   * Para abrir una carrera por su id: las del catalogo y ademas los ensayos.
+   * Un ensayo nunca se publica, pero sus inscritos de prueba tienen que poder
+   * abrirlo desde su inicio y "Mis carreras". No sale en ningun listado: solo
+   * llega quien ya tiene su id.
+   */
+  private visiblesPorId(ahora: Date): Prisma.MarathonWhereInput {
+    return { OR: [this.visibles(ahora), { rehearsalOfId: { not: null } }] };
   }
 
   private filtros(query: ListMarathonsQueryDto, ahora: Date): Prisma.MarathonWhereInput {

@@ -30,6 +30,9 @@ api.paceup.example {
 		root * /opt/running-api/uploads
 		# Los nombres llevan UUID: el contenido de una URL nunca cambia.
 		header Cache-Control "public, max-age=2592000, immutable"
+		# Son imagenes publicas: sin esto la app web (y el admin web de Flutter)
+		# no puede descargarlas por XHR y las vistas previas salen vacias.
+		header Access-Control-Allow-Origin "*"
 		file_server {
 			hide .*
 		}

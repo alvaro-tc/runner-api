@@ -518,6 +518,13 @@ model Marathon {
   logoVerticalUrl   String?
   logoHorizontalUrl String?
 
+  /// No nulo = esta maraton es un **ensayo** de otra: una copia privada para
+  /// probar preparacion, largada y corte con inscritos de prueba sin bloquear
+  /// la app de los inscritos reales. Nunca se publica, se puede reiniciar
+  /// borrando lo que genero y se puede borrar aunque tenga inscritos. Sin
+  /// relacion a proposito: borrar la original no debe arrastrar sus ensayos.
+  rehearsalOfId String?
+
   /// TEMPORAL — QR de cobro del organizador (clave de storage o URL absoluta,
   /// igual que `coverUrl`). Sin esto la maraton no admite `qr_manual`.
   /// Ver `docs/pago-qr-manual.md`.

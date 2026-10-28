@@ -309,13 +309,198 @@ export class AdminService {
    * un clic en el panel en un incidente.
    */
   async publicar(marathonId: string, publicada: boolean) {
-    await this.buscarMaraton(marathonId);
+    const maraton = await this.buscarMaraton(marathonId);
+
+    // Un ensayo es una copia con inscritos de prueba: publicarlo lo pondria en
+    // el catalogo junto a la carrera de verdad.
+    if (publicada && maraton.rehearsalOfId) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        'Un ensayo no se publica: es una copia privada para probar la largada',
+        HttpStatus.CONFLICT,
+      );
+    }
 
     return this.prisma.marathon.update({
       where: { id: marathonId },
       data: { publishedAt: publicada ? new Date() : null },
       select: { id: true, slug: true, name: true, publishedAt: true },
     });
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Ensayos
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Crea un ensayo de una maraton: una copia privada con inscritos de prueba.
+   *
+   * Es la forma de probar preparacion, largada y corte **con inscritos** sin
+   * tocar la carrera real: preparar o largar la real bloquea la app de todos
+   * sus inscritos de verdad. La copia lleva lo que se ve —logos, afiche,
+   * recorrido, programa, categorias y extras— y como inscritos solo las cuentas
+   * que se indican, ya confirmadas y con dorsal `E001`, `E002`...
+   *
+   * Nace sin publicar y con las inscripciones cerradas: no sale en el catalogo
+   * y nadie mas se puede apuntar. Los inscritos de prueba la ven en su inicio y
+   * en "Mis carreras" como una carrera mas, que es justo lo que se quiere
+   * probar.
+   */
+  async crearEnsayo(marathonId: string, emails: string[]) {
+    const original = await this.prisma.marathon.findUnique({
+      where: { id: marathonId },
+      include: { categories: true, extras: true },
+    });
+    if (!original) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'La maraton no existe', HttpStatus.NOT_FOUND);
+    }
+    if (original.rehearsalOfId) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        'Eso ya es un ensayo: crea el ensayo desde la carrera original',
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const correos = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+    // `email` es citext: la busqueda ya no distingue mayusculas.
+    const usuarios = await this.prisma.user.findMany({
+      where: { email: { in: correos }, deletedAt: null },
+      select: { id: true, email: true, name: true },
+      orderBy: { email: 'asc' },
+    });
+    const faltan = correos.filter((c) => !usuarios.some((u) => u.email?.toLowerCase() === c));
+    if (faltan.length > 0 || usuarios.length === 0) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        `No hay ninguna cuenta con: ${faltan.join(', ') || 'esos correos'}. ` +
+          'Cada inscrito de prueba tiene que haber creado su cuenta en la app.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const ahora = new Date();
+    // Una carrera pasada no saldria en el inicio de nadie: el ensayo se pone
+    // dentro de una hora para que los inscritos la vean como su proxima.
+    const startsAt =
+      original.startsAt > ahora ? original.startsAt : new Date(ahora.getTime() + 60 * 60 * 1000);
+
+    const copia = await this.prisma.$transaction(async (tx) => {
+      const nueva = await tx.marathon.create({
+        data: {
+          slug: `${original.slug}-ensayo-${randomUUID().slice(0, 6)}`,
+          name: `[Ensayo] ${original.name}`,
+          description: original.description,
+          startsAt,
+          timezone: original.timezone,
+          city: original.city,
+          country: original.country,
+          lat: original.lat,
+          lng: original.lng,
+          distanceMeters: original.distanceMeters,
+          laps: original.laps,
+          capacity: Math.max(original.capacity, usuarios.length),
+          slotsTaken: usuarios.length,
+          priceCents: original.priceCents,
+          currency: original.currency,
+          registrationStatus: MarathonRegistrationStatus.closed,
+          routeGeoJson: (original.routeGeoJson ?? Prisma.DbNull) as Prisma.InputJsonValue,
+          routeId: original.routeId,
+          schedule: original.schedule as Prisma.InputJsonValue,
+          includes: original.includes as Prisma.InputJsonValue,
+          kitPickup: (original.kitPickup ?? Prisma.DbNull) as Prisma.InputJsonValue,
+          // Mismas claves de storage: el ensayo no duplica archivos y borrarlo
+          // no toca los de la original (borrar una maraton no borra archivos).
+          coverUrl: original.coverUrl,
+          logoVerticalUrl: original.logoVerticalUrl,
+          logoHorizontalUrl: original.logoHorizontalUrl,
+          preparingMessage: original.preparingMessage,
+          rehearsalOfId: original.id,
+          categories: {
+            create: original.categories.map((c) => ({
+              name: c.name,
+              minAge: c.minAge,
+              maxAge: c.maxAge,
+              gender: c.gender,
+              extraPriceCents: c.extraPriceCents,
+            })),
+          },
+          extras: {
+            create: original.extras.map((e) => ({
+              name: e.name,
+              priceCents: e.priceCents,
+              stock: e.stock,
+            })),
+          },
+        },
+        include: { categories: { orderBy: { name: 'asc' } } },
+      });
+
+      for (const [i, usuario] of usuarios.entries()) {
+        await tx.registration.create({
+          data: {
+            userId: usuario.id,
+            marathonId: nueva.id,
+            categoryId: nueva.categories[0]?.id ?? null,
+            status: RegistrationStatus.confirmed,
+            step: 3,
+            bibNumber: `E${String(i + 1).padStart(3, '0')}`,
+            personalData: { fullName: usuario.name, email: usuario.email },
+            currency: original.currency,
+            termsAcceptedAt: ahora,
+            registeredAt: ahora,
+          },
+        });
+      }
+
+      return nueva;
+    });
+
+    this.logger.log(
+      `Ensayo ${copia.slug} creado desde ${original.slug} con ${usuarios.length} inscrito/s`,
+    );
+
+    return this.detalleMaraton(copia.id);
+  }
+
+  /**
+   * Deja la carrera como antes de la preparacion: sin preparar, sin largar y
+   * sin cortar, y lo anuncia para que los moviles de los inscritos se liberen.
+   *
+   * En un **ensayo** borra ademas lo que genero la prueba —sesiones de
+   * seguimiento, entrenos de carrera y resultados— para poder repetirla desde
+   * cero. En una carrera real solo toca las tres fechas: lo que corrio alguien
+   * de verdad no se borra desde un boton.
+   */
+  async reiniciarEnVivo(marathonId: string) {
+    const maraton = await this.buscarMaraton(marathonId);
+    const ensayo = maraton.rehearsalOfId !== null;
+
+    const actualizada = await this.prisma.$transaction(async (tx) => {
+      if (ensayo) await this.borrarLoQueGeneroLaCarrera(tx, marathonId);
+      return tx.marathon.update({
+        where: { id: marathonId },
+        data: { preparingAt: null, liveStartedAt: null, liveFinishedAt: null },
+        select: SELECT_EN_VIVO,
+      });
+    });
+
+    const estado = estadoParaElSocket(actualizada);
+    await this.live.anunciar(estado);
+    this.logger.warn(`Maraton ${actualizada.slug} reiniciada${ensayo ? ' (ensayo)' : ''}`);
+
+    return { ...estado, slug: actualizada.slug, name: actualizada.name };
+  }
+
+  /**
+   * Lo que deja una carrera corrida: resultados, entrenos de carrera y
+   * sesiones de seguimiento (con sus puntos, que caen en cascada). Solo se
+   * llama para ensayos: los entrenos son de cuentas de prueba.
+   */
+  private async borrarLoQueGeneroLaCarrera(tx: Prisma.TransactionClient, marathonId: string) {
+    await tx.raceResult.deleteMany({ where: { registration: { marathonId } } });
+    await tx.trackingSession.deleteMany({ where: { marathonId } });
+    await tx.workout.deleteMany({ where: { registration: { marathonId } } });
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -664,6 +849,11 @@ export class AdminService {
       intent: m.registrationStatus,
       resolved: resolverEstado(m),
       registrations: m._count.registrations,
+      rehearsalOfId: m.rehearsalOfId,
+      // La miniatura de la lista: sin esto el panel pintaba siempre el hueco.
+      coverUrl: this.storage.publicUrl(m.coverUrl),
+      logoVerticalUrl: this.storage.publicUrl(m.logoVerticalUrl),
+      logoHorizontalUrl: this.storage.publicUrl(m.logoHorizontalUrl),
       feeOverride: m.serviceFeeConfig,
       // El panel pinta con esto el estado en vivo de la lista sin abrir cada
       // carrera: hay tres, y saber cual esta corriendo es lo primero que se mira.
@@ -1197,6 +1387,18 @@ export class AdminService {
   async borrarMaraton(marathonId: string) {
     const maraton = await this.buscarMaraton(marathonId);
 
+    // Un ensayo se borra con todo: sus inscritos son cuentas de prueba y lo que
+    // corrieron no le sirve a nadie. Las sesiones de seguimiento se borran a
+    // mano porque el esquema solo las desvincularia.
+    if (maraton.rehearsalOfId) {
+      await this.prisma.$transaction(async (tx) => {
+        await this.borrarLoQueGeneroLaCarrera(tx, marathonId);
+        await tx.marathon.delete({ where: { id: marathonId } });
+      });
+      this.logger.warn(`Ensayo ${maraton.slug} borrado`);
+      return { deleted: true, slug: maraton.slug };
+    }
+
     const inscritos = await this.prisma.registration.count({ where: { marathonId } });
     if (inscritos > 0) {
       throw new AppException(
@@ -1257,6 +1459,7 @@ export class AdminService {
       coverUrl: this.storage.publicUrl(maraton.coverUrl),
       logoVerticalUrl: this.storage.publicUrl(maraton.logoVerticalUrl),
       logoHorizontalUrl: this.storage.publicUrl(maraton.logoHorizontalUrl),
+      rehearsalOfId: maraton.rehearsalOfId,
       // TEMPORAL — cobro por QR manual. Ver `docs/pago-qr-manual.md`.
       // Resuelto a URL publica (como en `MarathonsService`): el panel la pinta
       // en una vista previa y una clave de storage relativa no le sirve.

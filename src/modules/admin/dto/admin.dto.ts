@@ -1,6 +1,8 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsEmail,
@@ -743,4 +745,18 @@ export class PrepareMarathonDto {
   @IsString()
   @MaxLength(500)
   declare message?: string | null;
+}
+
+/**
+ * Quienes se inscriben en un ensayo: cuentas que ya existen, por su email.
+ * Son las que van a ver la carrera de prueba en su movil y quedarse bloqueadas
+ * mientras se ensaya, asi que se eligen una a una.
+ */
+export class CreateRehearsalDto {
+  @ApiProperty({ example: ['prueba1@camrun.app', 'prueba2@camrun.app'], type: [String] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @IsEmail({}, { each: true, message: 'Algun email no tiene un formato válido' })
+  emails!: string[];
 }
