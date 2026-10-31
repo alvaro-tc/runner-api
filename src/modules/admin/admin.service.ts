@@ -949,9 +949,36 @@ export class AdminService {
   }) {
     const pageSize = filtros.pageSize ?? 20;
     const page = filtros.page ?? 1;
+    const where = this.filtroPagos(filtros);
+
+    const [total, pagos] = await this.prisma.$transaction([
+      this.prisma.payment.count({ where }),
+      this.prisma.payment.findMany({
+        where,
+        // Los pendientes primero y, dentro, el mas viejo arriba: es una cola de
+        // trabajo. Ordenar solo por fecha dejaria lo que hay que hacer mezclado
+        // con lo que ya se hizo.
+        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: INCLUDE_TICKET,
+      }),
+    ]);
+
+    const filas = pagos.map((p) => this.aTicket(p));
+
+    return new Paginated(filas, null, total, page, pageSize);
+  }
+
+  /** Mismo filtro de [listarPagos], separado para que [pagosCsv] no lo repita. */
+  private filtroPagos(filtros: {
+    marathonId?: string;
+    status?: PaymentStatus;
+    q?: string;
+  }): Prisma.PaymentWhereInput {
     const q = filtros.q?.trim();
 
-    const where: Prisma.PaymentWhereInput = {
+    return {
       ...(filtros.status ? { status: filtros.status } : {}),
       registration: {
         deletedAt: null,
@@ -973,24 +1000,44 @@ export class AdminService {
           }
         : {}),
     };
+  }
 
-    const [total, pagos] = await this.prisma.$transaction([
-      this.prisma.payment.count({ where }),
-      this.prisma.payment.findMany({
-        where,
-        // Los pendientes primero y, dentro, el mas viejo arriba: es una cola de
-        // trabajo. Ordenar solo por fecha dejaria lo que hay que hacer mezclado
-        // con lo que ya se hizo.
-        orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize,
-        include: INCLUDE_TICKET,
-      }),
-    ]);
+  /**
+   * Cobros en CSV, con los mismos filtros que la cola de validacion.
+   *
+   * Sin paginar: el organizador que exporta quiere la lista completa que esta
+   * mirando en pantalla, no una pagina de 20.
+   */
+  async pagosCsv(filtros: {
+    marathonId?: string;
+    status?: PaymentStatus;
+    q?: string;
+  }): Promise<{ filename: string; csv: string }> {
+    const pagos = await this.prisma.payment.findMany({
+      where: this.filtroPagos(filtros),
+      orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
+      include: INCLUDE_TICKET,
+    });
 
     const filas = pagos.map((p) => this.aTicket(p));
 
-    return new Paginated(filas, null, total, page, pageSize);
+    const csv = aCsv(filas, [
+      { header: 'Dorsal', valor: (f) => f.bibNumber },
+      { header: 'Corredora', valor: (f) => f.runner },
+      { header: 'CI', valor: (f) => f.runnerCi },
+      { header: 'Celular', valor: (f) => f.runnerPhone },
+      { header: 'Email', valor: (f) => f.runnerEmail },
+      { header: 'Carrera', valor: (f) => f.marathon },
+      { header: 'Monto (Bs)', valor: (f) => (f.amountCents / 100).toFixed(2) },
+      { header: 'Metodo', valor: (f) => f.method },
+      { header: 'Estado', valor: (f) => f.status },
+      { header: 'Referencia comprobante', valor: (f) => f.proofReference },
+      { header: 'Validado por', valor: (f) => f.validatedBy },
+      { header: 'Validado el', valor: (f) => f.validatedAt },
+      { header: 'Creado el', valor: (f) => f.createdAt },
+    ]);
+
+    return { filename: 'cobros.csv', csv };
   }
 
   /**

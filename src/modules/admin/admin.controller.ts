@@ -677,6 +677,34 @@ export class AdminController {
     return this.admin.listarTransferenciasPendientes();
   }
 
+  /**
+   * El CSV de cobros, con los mismos filtros de la cola de validacion.
+   *
+   * Igual que `registrants.csv`: sale fuera del sobre `{ data, meta }` para
+   * que el navegador lo descargue con solo un enlace.
+   */
+  @Get('payments.csv')
+  @Roles('admin', 'organizer')
+  @Header('Content-Type', 'text/csv; charset=utf-8')
+  @ApiQuery({ name: 'marathonId', required: false })
+  @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
+  @ApiQuery({ name: 'q', required: false })
+  @ApiOperation({
+    summary: 'Exportar los cobros a CSV',
+    description: 'La misma lista y los mismos filtros de `GET /admin/payments`, sin paginar.',
+  })
+  @ApiResponse({ status: 200, description: 'Archivo CSV' })
+  async exportarPagos(
+    @Res() res: Response,
+    @Query('marathonId') marathonId?: string,
+    @Query('status') status?: PaymentStatus,
+    @Query('q') q?: string,
+  ) {
+    const { filename, csv } = await this.admin.pagosCsv({ marathonId, status, q });
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  }
+
   // Despues de `pending-transfers`: declarado antes, `:id` se lo tragaria.
   @Get('payments/:id')
   @Roles('admin', 'organizer')
