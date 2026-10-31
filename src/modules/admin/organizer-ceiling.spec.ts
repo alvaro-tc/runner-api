@@ -5,7 +5,7 @@ import { ErrorCode } from '../../common/errors/error-codes';
 import { AdminService } from './admin.service';
 
 /**
- * El techo del rol `organizer`.
+ * El techo de los roles `organizer` y `osi`.
  *
  * Se prueba solo esta funcion —sin base ni modulo— porque es la unica que
  * separa "administrar corredores" de una toma de cuenta: resetear la
@@ -17,8 +17,8 @@ describe('techo del rol organizer', () => {
   const admin = Object.create(AdminService.prototype) as AdminService;
   const techo = (actor: UserRole, objetivo?: UserRole, pedido?: UserRole) =>
     (
-      admin as unknown as { techoDeOrganizador: (a: UserRole, o?: UserRole, p?: UserRole) => void }
-    ).techoDeOrganizador(actor, objetivo, pedido);
+      admin as unknown as { techoDeRol: (a: UserRole, o?: UserRole, p?: UserRole) => void }
+    ).techoDeRol(actor, objetivo, pedido);
 
   function niega(fn: () => void) {
     try {
@@ -48,5 +48,16 @@ describe('techo del rol organizer', () => {
   it('no lo deja repartir roles que no sean corredor', () => {
     niega(() => techo('organizer', 'runner', 'admin'));
     niega(() => techo('organizer', 'runner', 'organizer'));
+  });
+
+  it('deja al osi administrar corredores, organizadores y otros osi', () => {
+    expect(() => techo('osi', 'runner', 'organizer')).not.toThrow();
+    expect(() => techo('osi', 'organizer', 'osi')).not.toThrow();
+    expect(() => techo('osi', 'osi', 'runner')).not.toThrow();
+  });
+
+  it('no deja al osi tocar a un admin ni repartir ese rol', () => {
+    niega(() => techo('osi', 'admin'));
+    niega(() => techo('osi', 'runner', 'admin'));
   });
 });

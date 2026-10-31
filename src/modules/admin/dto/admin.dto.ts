@@ -635,7 +635,7 @@ export class ListUsersQueryDto {
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   q?: string;
 
-  @ApiPropertyOptional({ enum: UserRole, description: 'Sin esto, vienen los tres roles' })
+  @ApiPropertyOptional({ enum: UserRole, description: 'Sin esto, vienen todos los roles que el actor puede ver' })
   @IsOptional()
   @IsEnum(UserRole)
   role?: UserRole;

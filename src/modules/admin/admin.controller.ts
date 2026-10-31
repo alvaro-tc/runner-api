@@ -259,6 +259,18 @@ export class AdminController {
     return this.admin.crearMaraton(dto);
   }
 
+  @Get('marathons/:id/stats')
+  @ApiOperation({
+    summary: 'Metricas de una maratón para el resumen del admin',
+    description:
+      'Inscritas confirmadas, cupos, recaudado (cobros `paid`), cobros validados y por validar, ' +
+      'comprobantes en revisión, vistas del detalle y visitas a la página de inicio.',
+  })
+  @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'NOT_FOUND' })
+  metricas(@Param('id') id: string) {
+    return this.admin.metricasMaraton(id);
+  }
+
   @Get('marathons/:id')
   @Roles('admin', 'organizer')
   @ApiOperation({
@@ -787,7 +799,7 @@ export class AdminController {
   // ─── Usuarios ────────────────────────────────────────────────────────────
 
   @Get('users')
-  @Roles('admin', 'organizer')
+  @Roles('admin', 'organizer', 'osi')
   @ApiOperation({
     summary: 'Usuarios, sin datos sensibles',
     description:
@@ -795,14 +807,15 @@ export class AdminController {
       'consulta, y así no puede filtrarse por un descuido. ' +
       'Paginado por `page`/`pageSize` —el total va en `meta.total`— y filtrable por `role`. ' +
       '`q` busca en email, CI, nombre y el celular que dejó en una inscripción. ' +
-      'A un `organizer` se le devuelven **solo corredores**, pida el rol que pida: es el mismo ' +
-      'techo que le impide editar a un admin, aplicado también a mirar.',
+      'A un `organizer` se le devuelven **solo corredores**, y a un `osi` todo **menos admins**, ' +
+      'pidan el rol que pidan: es el mismo techo que les impide editar a un admin, aplicado ' +
+      'también a mirar.',
   })
   listarUsuarios(@CurrentUser('role') actorRole: UserRole, @Query() query: ListUsersQueryDto) {
     return this.admin.listarUsuarios(query, actorRole);
   }
   @Post('users')
-  @Roles('admin', 'organizer')
+  @Roles('admin', 'organizer', 'osi')
   @ApiOperation({
     summary: 'Crear una cuenta',
     description:
@@ -817,11 +830,11 @@ export class AdminController {
   }
 
   @Put('users/:id')
-  @Roles('admin', 'organizer')
+  @Roles('admin', 'organizer', 'osi')
   @ApiOperation({
     summary: 'Editar nombre, email, rol o verificación',
     description:
-      'Un admin no puede quitarse a sí mismo el rol: sería dejar el panel sin nadie que pueda ' +
+      'Nadie puede cambiarse a sí mismo el rol: un admin dejaría el panel sin nadie que pueda ' +
       'entrar. Que lo haga otro admin.',
   })
   @ApiResponse({ status: 409, type: ErrorResponseDto, description: 'CONFLICT / email ocupado' })
@@ -835,7 +848,7 @@ export class AdminController {
   }
 
   @Post('users/:id/password')
-  @Roles('admin', 'organizer')
+  @Roles('admin', 'organizer', 'osi')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Ponerle una contraseña nueva a alguien',
@@ -852,6 +865,7 @@ export class AdminController {
   }
 
   @Delete('users/:id')
+  @Roles('admin', 'osi')
   @ApiOperation({
     summary: 'Borrar una cuenta',
     description:

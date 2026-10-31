@@ -46,10 +46,21 @@ describe('listado de usuarios del panel', () => {
 
   // El techo del organizador aplicado a mirar, no solo a editar. Si el rol del
   // actor no llega al `where`, un organizador se lista los admins con sus
-  // correos: justo las cuentas que `techoDeOrganizador` le impide tocar.
+  // correos: justo las cuentas que `techoDeRol` le impide tocar.
   it('a un organizador solo le lista corredores, pida el rol que pida', async () => {
     await listar({ role: 'admin' }, UserRole.organizer);
-    expect(consulta().where).toEqual({ role: 'runner' });
+    expect(consulta().where).toEqual({ role: { in: ['runner'] } });
+  });
+
+  // Mismo techo para el osi: todo menos admins.
+  it('a un osi no le lista admins, ni pidiendolos', async () => {
+    await listar({ role: 'admin' }, UserRole.osi);
+    expect(consulta().where).toEqual({ role: { in: ['runner', 'organizer', 'osi'] } });
+  });
+
+  it('a un osi le respeta un filtro que si alcanza', async () => {
+    await listar({ role: 'organizer' }, UserRole.osi);
+    expect(consulta().where).toEqual({ role: 'organizer' });
   });
 
   it('a un admin le respeta el filtro que pidio', async () => {

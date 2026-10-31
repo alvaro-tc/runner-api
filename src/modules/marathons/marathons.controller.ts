@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, HttpCode, HttpStatus, Param, Post, Query } from '@nestjs/common';
 import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { Public } from '../auth/decorators/public.decorator';
@@ -51,6 +51,16 @@ export class MarathonsController {
   @ApiResponse({ status: 200, type: [MarathonSummaryDto] })
   upcoming(@Query() query: UpcomingQueryDto) {
     return this.marathons.proximas(query.limit ?? LIMITE_UPCOMING_POR_DEFECTO);
+  }
+
+  @Post('page-view')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Contar una visita a la pagina de inicio de la web',
+    description: 'Alimenta el resumen del admin. Las vistas del detalle se cuentan solas en GET :slug.',
+  })
+  async pageView() {
+    await this.marathons.contarVisita();
   }
 
   @Get(':slug')

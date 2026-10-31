@@ -120,6 +120,15 @@ type UsuarioSeleccionado = {
 };
 
 /** Listar, crear y editar devuelven la misma forma, para que el panel repinte igual. */
+/**
+ * Que cuentas puede administrar —y que roles repartir— cada rol de staff.
+ * Sin entrada, sin techo: el admin. Ver `techoDeRol`.
+ */
+const ROLES_ADMINISTRABLES: Partial<Record<UserRole, UserRole[]>> = {
+  [UserRole.organizer]: [UserRole.runner],
+  [UserRole.osi]: [UserRole.runner, UserRole.organizer, UserRole.osi],
+};
+
 function aUsuarioPublico(u: UsuarioSeleccionado) {
   return {
     id: u.id,
@@ -1152,11 +1161,16 @@ export class AdminService {
     const page = query.page ?? 1;
     const busqueda = query.q;
 
-    // Un organizador solo ve corredores, digan lo que digan sus filtros. Es el
-    // mismo techo que ya le impide editar a un admin (`techoDeOrganizador`),
-    // aplicado tambien a **mirar**: dejarle listar la plantilla de admins le
-    // daria los correos con los que atacar las cuentas que no puede tocar.
-    const rol = actorRole === UserRole.organizer ? UserRole.runner : query.role;
+    // Un organizador solo ve corredores, y un osi todo menos admins, digan lo
+    // que digan sus filtros. Es el mismo techo que ya les impide editar a un
+    // admin (`techoDeRol`), aplicado tambien a **mirar**: dejarles listar la
+    // plantilla de admins les daria los correos con los que atacar las cuentas
+    // que no pueden tocar.
+    const permitidos = actorRole && ROLES_ADMINISTRABLES[actorRole];
+    const rol =
+      permitidos && !(query.role && permitidos.includes(query.role))
+        ? { in: permitidos }
+        : query.role;
 
     // El rol va en la consulta y no en el cliente: la pagina corta por fecha, y
     // filtrando despues los admins y organizadores —pocos, y de los primeros
@@ -1468,6 +1482,45 @@ export class AdminService {
   }
 
   /** Una maraton con sus categorias y extras: lo que pinta el formulario de edicion. */
+  /**
+   * Metricas del resumen del admin para una maraton. Inscritas son las
+   * confirmadas (pago validado); lo recaudado sale de los cobros `paid`, no de
+   * `priceCents * inscritas`, porque categorias y extras cambian el total.
+   */
+  async metricasMaraton(marathonId: string) {
+    const maraton = await this.prisma.marathon.findUnique({
+      where: { id: marathonId },
+      select: { capacity: true, views: true },
+    });
+    if (!maraton) {
+      throw new AppException(ErrorCode.NOT_FOUND, 'La maraton no existe', HttpStatus.NOT_FOUND);
+    }
+
+    const deLaMaraton = { registration: { marathonId } };
+    const [confirmed, pagados, paymentsPending, proofsInReview, inicio] = await Promise.all([
+      this.prisma.registration.count({ where: { marathonId, status: 'confirmed' } }),
+      this.prisma.payment.aggregate({
+        where: { ...deLaMaraton, status: 'paid' },
+        _count: { _all: true },
+        _sum: { amountCents: true },
+      }),
+      this.prisma.payment.count({ where: { ...deLaMaraton, status: 'pending' } }),
+      this.prisma.paymentProof.count({ where: { status: 'in_review', payment: deLaMaraton } }),
+      this.prisma.siteCounter.findUnique({ where: { key: 'inicio' } }),
+    ]);
+
+    return {
+      confirmed,
+      capacity: maraton.capacity,
+      revenueCents: pagados._sum.amountCents ?? 0,
+      paymentsPaid: pagados._count._all,
+      paymentsPending,
+      proofsInReview,
+      marathonViews: maraton.views,
+      pageViews: inicio?.value ?? 0,
+    };
+  }
+
   async detalleMaraton(marathonId: string) {
     const maraton = await this.prisma.marathon.findUnique({
       where: { id: marathonId },
@@ -1630,39 +1683,41 @@ export class AdminService {
    * darian cuentas con seguridad distinta segun por donde entraron.
    */
   /**
-   * Techo del rol `organizer`.
+   * Techo de los roles `organizer` y `osi` (ver `ROLES_ADMINISTRABLES`).
    *
    * Un organizador administra corredores y nada mas: no puede tocar la cuenta
-   * de un admin ni de otro organizador, ni repartir esos roles. Sin esta
-   * comprobacion el organizador podria darse `admin` a si mismo o resetear la
-   * contrasena del admin y entrar como el — el reset de contrasenas es una
-   * toma de cuenta con otro nombre.
+   * de un admin ni de otro organizador, ni repartir esos roles. Un osi llega
+   * hasta organizadores y otros osi, pero nunca a un admin. Sin esta
+   * comprobacion cualquiera de los dos podria darse `admin` a si mismo o
+   * resetear la contrasena del admin y entrar como el — el reset de
+   * contrasenas es una toma de cuenta con otro nombre.
    *
    * Va en el servicio y no en el guard porque lo que decide no es el endpoint
    * sino **sobre quien** se ejecuta, y eso solo se sabe leyendo el objetivo.
    */
-  private techoDeOrganizador(actorRole: UserRole, objetivo?: UserRole, rolPedido?: UserRole) {
-    if (actorRole !== UserRole.organizer) return;
+  private techoDeRol(actorRole: UserRole, objetivo?: UserRole, rolPedido?: UserRole) {
+    const permitidos = ROLES_ADMINISTRABLES[actorRole];
+    if (!permitidos) return;
 
-    if (objetivo && objetivo !== UserRole.runner) {
+    if (objetivo && !permitidos.includes(objetivo)) {
       throw new AppException(
         ErrorCode.INSUFFICIENT_ROLE,
-        'Un organizador solo puede administrar cuentas de corredor',
+        'Tu rol no puede administrar esta cuenta',
         HttpStatus.FORBIDDEN,
       );
     }
 
-    if (rolPedido && rolPedido !== UserRole.runner) {
+    if (rolPedido && !permitidos.includes(rolPedido)) {
       throw new AppException(
         ErrorCode.INSUFFICIENT_ROLE,
-        'Un organizador solo puede asignar el rol de corredor',
+        'Tu rol no puede asignar ese rol',
         HttpStatus.FORBIDDEN,
       );
     }
   }
 
   async crearUsuario(dto: CreateUserDto, actorRole: UserRole) {
-    this.techoDeOrganizador(actorRole, undefined, dto.role);
+    this.techoDeRol(actorRole, undefined, dto.role);
 
     const existente = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -1701,7 +1756,8 @@ export class AdminService {
    *
    * Un admin **no puede quitarse a si mismo el rol**: seria dejar el panel sin
    * nadie que pueda entrar, y recuperarlo requiere tocar la base a mano. Que lo
-   * haga otro admin, que es la comprobacion que ya existe de verdad.
+   * haga otro admin, que es la comprobacion que ya existe de verdad. Lo mismo
+   * para un osi: ni subirse ni bajarse el rol solo.
    */
   async actualizarUsuario(
     userId: string,
@@ -1711,12 +1767,12 @@ export class AdminService {
   ) {
     const actual = await this.buscarUsuario(userId);
 
-    this.techoDeOrganizador(actorRole, actual.role, dto.role);
+    this.techoDeRol(actorRole, actual.role, dto.role);
 
-    if (dto.role && dto.role !== UserRole.admin && userId === adminUserId) {
+    if (dto.role && dto.role !== actorRole && userId === adminUserId) {
       throw new AppException(
         ErrorCode.CONFLICT,
-        'No puedes quitarte a ti mismo el rol de administrador',
+        'No puedes cambiarte a ti mismo el rol',
         HttpStatus.CONFLICT,
       );
     }
@@ -1762,7 +1818,7 @@ export class AdminService {
   async cambiarPassword(userId: string, password: string, actorRole: UserRole) {
     const usuario = await this.buscarUsuario(userId);
 
-    this.techoDeOrganizador(actorRole, usuario.role);
+    this.techoDeRol(actorRole, usuario.role);
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -1802,7 +1858,7 @@ export class AdminService {
     }
 
     const usuario = await this.buscarUsuario(userId);
-    this.techoDeOrganizador(actorRole, usuario.role);
+    this.techoDeRol(actorRole, usuario.role);
 
     await this.users.borrarCuenta(userId);
 

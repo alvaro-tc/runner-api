@@ -153,6 +153,15 @@ export class MarathonsService {
     return maraton ? this.toResumen(maraton, ahora) : null;
   }
 
+  /** Una visita a la pagina de inicio de la web. */
+  async contarVisita() {
+    await this.prisma.siteCounter.upsert({
+      where: { key: 'inicio' },
+      create: { key: 'inicio', value: 1 },
+      update: { value: { increment: 1 } },
+    });
+  }
+
   async detalle(slugOId: string) {
     const ahora = new Date();
 
@@ -165,6 +174,11 @@ export class MarathonsService {
     });
 
     if (!maraton) throw this.noExiste();
+
+    // Fuera de la respuesta: una vista que no se cuenta no merece un 500.
+    void this.prisma.marathon
+      .update({ where: { id: maraton.id }, data: { views: { increment: 1 } } })
+      .catch(() => undefined);
 
     return {
       ...this.toResumen(maraton, ahora),

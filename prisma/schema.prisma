@@ -29,6 +29,9 @@ enum UserRole {
   // esta validando— pero no las crea, ni las edita, ni les da la largada.
   // Ver docs/api.md, seccion Administracion.
   organizer
+  // Oficial de Seguridad de la Informacion: solo administra cuentas. Toca
+  // corredores, organizadores y otros osi; nunca a un admin ni ese rol.
+  osi
   admin
 }
 
@@ -572,6 +575,10 @@ model Marathon {
   trainingPlans    TrainingPlan[]
   trackingSessions TrackingSession[]
 
+  /// Aperturas del detalle publico (web y app). Metrica de alcance del panel:
+  /// cuenta recargas, no personas.
+  views Int @default(0)
+
   @@index([startsAt])
   @@index([preparingAt])
   @@index([registrationStatus, startsAt])
@@ -618,6 +625,14 @@ model MarathonExtra {
 
   @@index([marathonId])
   @@map("marathon_extras")
+}
+
+/// Contadores sueltos del sitio. Hoy solo `inicio`: visitas a la pagina web.
+model SiteCounter {
+  key   String @id
+  value Int    @default(0)
+
+  @@map("site_counters")
 }
 
 /// Configuracion del cargo por servicio. `enabled = false` lo desactiva por

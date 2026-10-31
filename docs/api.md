@@ -680,6 +680,7 @@ haciendo clic, no una app.
 |---|---|
 | `runner` | Nada de `/admin/*`. Es el rol del registro público |
 | `organizer` | Administrar **cuentas de corredor** y validar **comprobantes de pago QR** |
+| `osi` | Oficial de Seguridad de la Información: **solo** administrar cuentas `runner`, `organizer` y `osi` |
 | `admin` | Todo |
 
 `organizer` es un admin recortado, pensado para quien atiende ventanilla el día
@@ -703,6 +704,12 @@ sino **sobre quién** se ejecuta, y eso solo se sabe leyendo la cuenta objetivo.
 Al intentarlo salta `INSUFFICIENT_ROLE` (`403`).
 
 Un organizador lo crea un admin desde `POST /admin/users` o `PUT /admin/users/:id`.
+
+`osi` tiene el mismo techo, un escalón más alto: lista, crea, edita, resetea y
+borra cuentas `runner`, `organizer` y `osi`, y reparte esos tres roles. No ve
+ni toca cuentas `admin` (tampoco al listar) ni puede dar ese rol. Fuera de los
+cinco endpoints de usuarios no alcanza nada de `/admin/*`. Nadie puede
+cambiarse su propio rol ni borrarse a sí mismo desde el panel.
 
 En el panel web, quien entra con `organizer` solo ve las pestañas **Comprobantes
 QR** y **Usuarios**, y en el desplegable de rol solo le aparece `runner`.
@@ -730,6 +737,7 @@ GET    /admin/marathons/:id/live                   ← admin | organizer · mapa
 POST   /admin/marathons/:id/cover                  ← afiche (multipart, campo `file`)
 POST   /admin/marathons/:id/qr                     ← QR de cobro, imagen de respaldo
 GET    /admin/marathons/:id/registrants.csv        ← admin | organizer
+GET    /admin/marathons/:id/stats                  ← admin (inscritas, recaudado, cobros, vistas)
 
 POST   /admin/marathons/:id/categories             ← categorías
 PUT    /admin/categories/:categoryId
@@ -747,11 +755,11 @@ POST   /admin/payments/:id/refund                   ← admin | organizer · dev
 POST   /admin/marathons/:id/results                ← cargar tiempos por dorsal
 POST   /admin/marathons/:id/recalculate-ranks
 
-GET    /admin/users?q=&role=&page=&pageSize=       ← admin | organizer · `meta.total`; `q` busca email, CI, nombre y celular
-POST   /admin/users                                ← admin | organizer · única forma de crear un admin
-PUT    /admin/users/:id                            ← admin | organizer
-POST   /admin/users/:id/password                   ← admin | organizer · cierra todas sus sesiones
-DELETE /admin/users/:id                            ← admin | organizer
+GET    /admin/users?q=&role=&page=&pageSize=       ← admin | organizer | osi · `meta.total`; `q` busca email, CI, nombre y celular
+POST   /admin/users                                ← admin | organizer | osi · única forma de crear un admin
+PUT    /admin/users/:id                            ← admin | organizer | osi
+POST   /admin/users/:id/password                   ← admin | organizer | osi · cierra todas sus sesiones
+DELETE /admin/users/:id                            ← admin | osi
 
 GET    /admin/payment-proofs                       ← admin | organizer · ver docs/pago-qr-manual.md
 POST   /admin/payment-proofs/:id/approve           ← admin | organizer
