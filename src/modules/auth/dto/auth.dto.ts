@@ -114,6 +114,12 @@ export class RegisterDto extends DeviceDto {
   @IsOptional()
   @IsEnum(Gender)
   gender?: Gender;
+
+  @ApiPropertyOptional({ example: 'La Paz', description: 'Por defecto: La Paz.' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  city?: string;
 }
 
 /**

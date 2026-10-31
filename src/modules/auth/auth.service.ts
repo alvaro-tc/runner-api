@@ -92,6 +92,7 @@ export class AuthService {
           create: {
             birthDate: dto.birthDate ? new Date(dto.birthDate) : null,
             ...(dto.gender ? { gender: dto.gender } : {}),
+            ...(dto.city?.trim() ? { city: dto.city.trim() } : {}),
           },
         },
         preferences: { create: {} },

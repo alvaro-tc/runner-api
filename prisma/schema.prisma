@@ -245,7 +245,7 @@ model UserProfile {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   avatarUrl        String?
-  city             String?
+  city             String?   @default("La Paz")
   country          String    @default("BO")
   birthDate        DateTime? @db.Date
   gender           Gender    @default(unspecified)
