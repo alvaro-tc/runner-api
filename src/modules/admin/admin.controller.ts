@@ -813,6 +813,7 @@ export class AdminController {
   // ─── Resultados ──────────────────────────────────────────────────────────
 
   @Get('marathons/:id/results')
+  @Permiso('carreras.ver')
   @ApiOperation({ summary: 'Ver los puestos del podio manual registrados' })
   listarPodioManual(@Param('id') id: string) {
     return this.admin.listarPodioManual(id);

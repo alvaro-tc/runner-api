@@ -10,7 +10,6 @@ import {
   IsIn,
   IsISO8601,
   IsInt,
-  IsIn,
   IsNotEmpty,
   IsNumber,
   IsObject,
