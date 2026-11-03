@@ -417,7 +417,7 @@ describe('Admin (e2e)', () => {
   });
 
   describe('resultados', () => {
-    /** Dos inscripciones confirmadas con dorsal, listas para recibir tiempos. */
+    /** Inscripciones confirmadas con dorsal, listas para recibir tiempos. */
     async function dosInscritos() {
       for (const bib of ['P-001', 'P-002']) {
         await prisma.registration.create({
@@ -485,6 +485,70 @@ describe('Admin (e2e)', () => {
         .expect(200);
 
       expect(await prisma.raceResult.count({ where: { registration: { marathonId } } })).toBe(1);
+    });
+
+    it('conserva los puestos manuales del podio al recalcular los demás', async () => {
+      await dosInscritos();
+      for (const bib of ['P-003', 'P-004']) {
+        await prisma.registration.create({
+          data: {
+            userId: runnerId,
+            marathonId,
+            status: 'confirmed',
+            step: 3,
+            bibNumber: bib,
+            totalCents: 20_000,
+            registeredAt: new Date(),
+          },
+        });
+      }
+      await http()
+        .post(`/api/v1/admin/marathons/${marathonId}/results`)
+        .set(auth())
+        .send({
+          results: [
+            { bibNumber: 'P-002', finishTimeSeconds: 7200, overallRank: 1 },
+            { bibNumber: 'P-001', finishTimeSeconds: 6900, overallRank: 2 },
+            { bibNumber: 'P-003', finishTimeSeconds: 7300, overallRank: 3 },
+            { bibNumber: 'P-004', finishTimeSeconds: 7400 },
+          ],
+        })
+        .expect(200);
+
+      await http()
+        .post(`/api/v1/admin/marathons/${marathonId}/recalculate-ranks`)
+        .set(auth())
+        .expect(200);
+
+      const puestos = await prisma.raceResult.findMany({
+        where: { registration: { marathonId } },
+        orderBy: { overallRank: 'asc' },
+        select: { overallRank: true, manualOverallRank: true, registration: { select: { bibNumber: true } } },
+      });
+      expect(
+        puestos.map((p) => [p.registration.bibNumber, p.overallRank, p.manualOverallRank]),
+      ).toEqual([
+        ['P-002', 1, 1],
+        ['P-001', 2, 2],
+        ['P-003', 3, 3],
+        ['P-004', 4, null],
+      ]);
+    });
+
+    it('rechaza repetir un puesto manual en la misma planilla', async () => {
+      await dosInscritos();
+      await http()
+        .post(`/api/v1/admin/marathons/${marathonId}/results`)
+        .set(auth())
+        .send({
+          results: [
+            { bibNumber: 'P-001', finishTimeSeconds: 6900, overallRank: 1 },
+            { bibNumber: 'P-002', finishTimeSeconds: 7200, overallRank: 1 },
+          ],
+        })
+        .expect(400);
+
+      expect(await prisma.raceResult.count({ where: { registration: { marathonId } } })).toBe(0);
     });
   });
 

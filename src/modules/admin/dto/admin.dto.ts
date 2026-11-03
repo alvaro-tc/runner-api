@@ -10,6 +10,7 @@ import {
   IsIn,
   IsISO8601,
   IsInt,
+  IsIn,
   IsNotEmpty,
   IsNumber,
   IsObject,
@@ -178,6 +179,13 @@ export class RaceResultRowDto {
   @IsOptional()
   @IsISO8601()
   finishedAt?: string;
+
+  @ApiPropertyOptional({ enum: [1, 2, 3], description: 'Puesto oficial asignado desde la planilla' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @IsIn([1, 2, 3])
+  overallRank?: number | null;
 }
 
 export class ImportResultsDto {
