@@ -1,21 +1,24 @@
 import type { ExecutionContext } from '@nestjs/common';
-import { HttpStatus } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard } from './roles.guard';
-import { ErrorCode } from '../../../common/errors/error-codes';
-import type { AppException } from '../../../common/errors/app.exception';
-import type { UserRole } from '../../../../generated/prisma/enums';
+import type { PermisosService } from '../permisos.service';
+import { permisosEfectivos } from '../permisos';
 
 /**
- * El guard de roles todavia no protege ningun endpoint — el primero llegara con
- * `/admin/*`. Se prueba ahora igualmente porque cuando ese endpoint exista, el
- * fallo seria silencioso: un panel de administracion abierto no da error, da
- * acceso.
+ * El guard decide quien entra al panel. Si falla, no da error: da acceso. Por
+ * eso se prueba cada borde: sin permiso exigido, el candado `*`, y un rol
+ * creado en el panel con solo lectura.
  */
-describe('RolesGuard', () => {
+describe('RolesGuard (permisos)', () => {
   const reflector = new Reflector();
+  const matriz: Record<string, string[]> = {
+    admin: ['carreras.ver', 'carreras.editar', 'config.gestionar'],
+    organizer: ['carreras.ver', 'cobros.ver', 'cobros.validar'],
+    veedor: ['carreras.ver', 'inscritas.ver'],
+  };
+  const permisos = { de: (r?: string) => (r ? permisosEfectivos(matriz[r]) : []) } as unknown as PermisosService;
 
-  function contexto(user?: { role: UserRole }): ExecutionContext {
+  function contexto(user?: { role: string }): ExecutionContext {
     return {
       switchToHttp: () => ({ getRequest: () => ({ user }) }),
       getHandler: () => () => undefined,
@@ -23,38 +26,42 @@ describe('RolesGuard', () => {
     } as unknown as ExecutionContext;
   }
 
-  function guardConRoles(roles: UserRole[] | undefined) {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(roles);
-    return new RolesGuard(reflector);
+  function guard(requeridos: string[] | undefined) {
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(requeridos);
+    return new RolesGuard(reflector, permisos);
   }
 
   afterEach(() => jest.restoreAllMocks());
 
-  it('deja pasar cuando el endpoint no exige ningun rol', () => {
-    expect(guardConRoles(undefined).canActivate(contexto({ role: 'runner' }))).toBe(true);
+  it('deja pasar cuando el endpoint no exige nada', () => {
+    expect(guard(undefined).canActivate(contexto({ role: 'runner' }))).toBe(true);
+    expect(guard([]).canActivate(contexto({ role: 'runner' }))).toBe(true);
   });
 
-  it('deja pasar al admin en un endpoint de admin', () => {
-    expect(guardConRoles(['admin']).canActivate(contexto({ role: 'admin' }))).toBe(true);
+  it('el candado NADIE no lo abre ningun rol, tampoco admin', () => {
+    expect(() => guard(['nadie']).canActivate(contexto({ role: 'admin' }))).toThrow();
+    expect(() => guard(['nadie']).canActivate(contexto({ role: 'organizer' }))).toThrow();
   });
 
-  it('bloquea al runner en un endpoint de admin', () => {
-    const guard = guardConRoles(['admin']);
-
-    expect(() => guard.canActivate(contexto({ role: 'runner' }))).toThrow();
-
-    try {
-      guard.canActivate(contexto({ role: 'runner' }));
-    } catch (err) {
-      const e = err as AppException;
-      expect(e.code).toBe(ErrorCode.INSUFFICIENT_ROLE);
-      expect(e.getStatus()).toBe(HttpStatus.FORBIDDEN);
-    }
-    expect.hasAssertions();
+  // Sin superusuario: lo que no esta en la tabla, admin tampoco lo tiene.
+  it('admin solo pasa con los permisos que tiene en la tabla', () => {
+    expect(guard(['carreras.editar']).canActivate(contexto({ role: 'admin' }))).toBe(true);
+    expect(() => guard(['roles.gestionar']).canActivate(contexto({ role: 'admin' }))).toThrow();
   });
 
-  it('bloquea si no hay usuario, aunque el guard de JWT haya fallado en ponerlo', () => {
-    // Cinturon y tirantes: este guard nunca asume que el anterior hizo su parte.
-    expect(() => guardConRoles(['admin']).canActivate(contexto(undefined))).toThrow();
+  it('un veedor ve inscritas pero no las exporta ni edita carreras', () => {
+    expect(guard(['inscritas.ver']).canActivate(contexto({ role: 'veedor' }))).toBe(true);
+    expect(() => guard(['inscritas.exportar']).canActivate(contexto({ role: 'veedor' }))).toThrow();
+    expect(() => guard(['carreras.editar']).canActivate(contexto({ role: 'veedor' }))).toThrow();
+  });
+
+  it('exige todos los permisos pedidos', () => {
+    expect(guard(['cobros.ver', 'cobros.validar']).canActivate(contexto({ role: 'organizer' }))).toBe(true);
+    expect(() => guard(['cobros.ver', 'roles.asignar']).canActivate(contexto({ role: 'organizer' }))).toThrow();
+  });
+
+  it('bloquea a un runner y a una peticion sin usuario', () => {
+    expect(() => guard(['carreras.ver']).canActivate(contexto({ role: 'runner' }))).toThrow();
+    expect(() => guard(['carreras.ver']).canActivate(contexto(undefined))).toThrow();
   });
 });

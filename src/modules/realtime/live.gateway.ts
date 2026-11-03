@@ -10,7 +10,9 @@ import {
 import type { Server, Socket } from 'socket.io';
 import { PrismaService } from '../../database/prisma.service';
 import { TokenService } from '../auth/token.service';
-import { RegistrationStatus, UserRole } from '../../../generated/prisma/enums';
+import { RegistrationStatus } from '../../../generated/prisma/enums';
+import { UserRole } from '../auth/permisos';
+import { PermisosService } from '../auth/permisos.service';
 import type { EstadoDeMaraton, LlegadaEnVivo, PosicionEnVivo } from './live-state';
 
 /** Namespace del seguimiento en vivo. Separado del resto por si algun dia lo hay. */
@@ -73,6 +75,7 @@ export class LiveGateway implements OnGatewayConnection {
   constructor(
     private readonly tokens: TokenService,
     private readonly prisma: PrismaService,
+    private readonly permisos: PermisosService,
   ) {}
 
   /**
@@ -137,7 +140,8 @@ export class LiveGateway implements OnGatewayConnection {
     const current = () => socket.subscriptions?.get(subscription) === version;
     await socket.authenticated;
     if (!socket.userId) return { ok: false, error: 'UNAUTHORIZED' };
-    const gestiona = socket.role === UserRole.admin || socket.role === UserRole.organizer;
+    // Quien puede ver carreras en el panel ve tambien los borradores y ensayos.
+    const gestiona = this.permisos.tiene(socket.role, 'carreras.ver');
 
     const existe = await this.prisma.marathon.count({
       where: gestiona

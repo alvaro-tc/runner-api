@@ -26,9 +26,58 @@ import {
   Gender,
   MarathonRegistrationStatus,
   ServiceFeeType,
-  UserRole,
 } from '../../../../generated/prisma/enums';
 import { PASSWORD_MESSAGE, PASSWORD_REGEX } from '../../auth/dto/auth.dto';
+import { PERMISOS } from '../../auth/permisos';
+
+/** Clave de rol: minusculas, numeros y guiones bajos (`veedor`, `jefe_de_mesa`). */
+export const CLAVE_ROL = /^[a-z][a-z0-9_]{1,39}$/;
+
+export class CreateRoleDto {
+  @ApiProperty({ example: 'veedor', description: 'Clave estable; no se puede cambiar despues' })
+  @Matches(CLAVE_ROL, { message: 'La clave va en minúsculas, sin espacios (ej.: jefe_de_mesa)' })
+  key!: string;
+
+  @ApiProperty({ example: 'Veedor' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  name!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  description?: string;
+
+  @ApiProperty({ type: [String], example: ['carreras.ver', 'inscritas.ver'] })
+  @IsArray()
+  @IsIn(PERMISOS, { each: true, message: 'Permiso desconocido' })
+  permissions!: string[];
+}
+
+export class UpdateRoleDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(60)
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(240)
+  description?: string;
+
+  @ApiPropertyOptional({ type: [String] })
+  @IsOptional()
+  @IsArray()
+  @IsIn(PERMISOS, { each: true, message: 'Permiso desconocido' })
+  permissions?: string[];
+}
 
 /**
  * Slug de maraton: minusculas, numeros y guiones.
@@ -635,10 +684,10 @@ export class ListUsersQueryDto {
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   q?: string;
 
-  @ApiPropertyOptional({ enum: UserRole, description: 'Sin esto, vienen todos los roles que el actor puede ver' })
+  @ApiPropertyOptional({ description: 'Clave del rol. Sin esto, vienen todos los roles que el actor puede ver' })
   @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
+  @Matches(CLAVE_ROL)
+  role?: string;
 
   @ApiPropertyOptional({ default: 1, minimum: 1 })
   @IsOptional()
@@ -677,10 +726,10 @@ export class CreateUserDto {
   @Matches(PASSWORD_REGEX, { message: PASSWORD_MESSAGE })
   password!: string;
 
-  @ApiPropertyOptional({ enum: UserRole, default: UserRole.runner })
+  @ApiPropertyOptional({ default: 'runner', description: 'Clave de un rol de `GET /admin/roles`' })
   @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
+  @Matches(CLAVE_ROL, { message: 'Rol inválido' })
+  role?: string;
 
   @ApiPropertyOptional({
     default: true,
@@ -710,10 +759,10 @@ export class UpdateUserDto {
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   name?: string;
 
-  @ApiPropertyOptional({ enum: UserRole })
+  @ApiPropertyOptional({ description: 'Clave de un rol de `GET /admin/roles`' })
   @IsOptional()
-  @IsEnum(UserRole)
-  role?: UserRole;
+  @Matches(CLAVE_ROL, { message: 'Rol inválido' })
+  role?: string;
 
   @ApiPropertyOptional({ description: 'Marcar o desmarcar el email como verificado' })
   @IsOptional()

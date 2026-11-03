@@ -1,7 +1,14 @@
 import { SetMetadata } from '@nestjs/common';
-import type { UserRole } from '../../../../generated/prisma/enums';
+import type { NADIE, Permiso as ClavePermiso } from '../permisos';
 
-export const ROLES_KEY = 'roles';
+export const PERMISOS_KEY = 'permisos';
 
-/** Restringe un endpoint a ciertos roles. Ej.: `@Roles('admin')`. */
-export const Roles = (...roles: UserRole[]) => SetMetadata(ROLES_KEY, roles);
+/**
+ * Exige permisos del catalogo (`src/modules/auth/permisos.ts`), todos los que
+ * se pasen. Sin argumentos: basta con estar logueado — sirve para abrir un
+ * metodo dentro de un controlador que exige algo a nivel de clase.
+ *
+ * `NADIE` es el candado por defecto de los controladores: no lo tiene ningun rol,
+ * asi que un endpoint nuevo que se olvide su `@Permiso` no queda abierto.
+ */
+export const Permiso = (...permisos: (ClavePermiso | typeof NADIE)[]) => SetMetadata(PERMISOS_KEY, permisos);

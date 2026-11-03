@@ -23,7 +23,8 @@ import { AppConfigService } from '../../config/app-config.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { Public } from '../auth/decorators/public.decorator';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { Permiso } from '../auth/decorators/roles.decorator';
+import { AuditoriaInterceptor } from '../admin/auditoria.interceptor';
 import { StorageService } from '../storage/storage.service';
 import { ACCURACY_MAXIMA_METROS } from '../workouts/metrics';
 import { ServiceFeeConfigService } from '../pricing/service-fee.service';
@@ -70,7 +71,7 @@ export class AppInfoController {
 
   @Get('app/apk/info')
   @ApiBearerAuth('access-token')
-  @Roles('admin')
+  @Permiso('config.gestionar')
   @ApiOperation({ summary: 'Datos del APK publicado (o null si no hay)' })
   infoApk() {
     return this.apkActual();
@@ -78,8 +79,8 @@ export class AppInfoController {
 
   @Post('app/apk')
   @ApiBearerAuth('access-token')
-  @Roles('admin')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: TOPE_APK, files: 1 } }))
+  @Permiso('config.gestionar')
+  @UseInterceptors(AuditoriaInterceptor, FileInterceptor('file', { limits: { fileSize: TOPE_APK, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
     schema: {

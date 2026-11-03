@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
-import { UserRole } from '../../../generated/prisma/enums';
+import { UserRole } from '../auth/permisos';
 import type { Notification } from '../../../generated/prisma/client';
 import { LiveService } from '../realtime/live.service';
 import { PushSender } from './push.sender';

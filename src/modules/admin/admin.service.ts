@@ -26,8 +26,13 @@ import {
   PaymentStatus,
   RegistrationStatus,
   ServiceFeeScope,
-  UserRole,
 } from '../../../generated/prisma/enums';
+import { MODULOS, UserRole } from '../auth/permisos';
+import { PermisosService } from '../auth/permisos.service';
+
+const igualesSinOrden = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && [...a].sort().join() === [...b].sort().join();
+import type { CreateRoleDto, UpdateRoleDto } from './dto/admin.dto';
 import { Prisma } from '../../../generated/prisma/client';
 import type { CreateRouteDto, ListRoutesQueryDto, UpdateRouteDto } from '../routes/dto/route.dto';
 import { aCsv } from './csv';
@@ -121,14 +126,6 @@ type UsuarioSeleccionado = {
 };
 
 /** Listar, crear y editar devuelven la misma forma, para que el panel repinte igual. */
-/**
- * Que cuentas puede administrar —y que roles repartir— cada rol de staff.
- * Sin entrada, sin techo: el admin. Ver `techoDeRol`.
- */
-const ROLES_ADMINISTRABLES: Partial<Record<UserRole, UserRole[]>> = {
-  [UserRole.organizer]: [UserRole.runner],
-  [UserRole.osi]: [UserRole.runner, UserRole.organizer, UserRole.osi],
-};
 
 function aUsuarioPublico(u: UsuarioSeleccionado) {
   return {
@@ -199,6 +196,7 @@ export class AdminService {
     private readonly users: UsersService,
     private readonly storage: StorageService,
     private readonly config: AppConfigService,
+    private readonly permisos: PermisosService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1167,11 +1165,8 @@ export class AdminService {
     // admin (`techoDeRol`), aplicado tambien a **mirar**: dejarles listar la
     // plantilla de admins les daria los correos con los que atacar las cuentas
     // que no pueden tocar.
-    const permitidos = actorRole && ROLES_ADMINISTRABLES[actorRole];
     const rol =
-      permitidos && !(query.role && permitidos.includes(query.role))
-        ? { in: permitidos }
-        : query.role;
+      actorRole && !this.permisos.tiene(actorRole, 'roles.asignar') ? UserRole.runner : query.role;
 
     // El rol va en la consulta y no en el cliente: la pagina corta por fecha, y
     // filtrando despues los admins y organizadores —pocos, y de los primeros
@@ -1708,23 +1703,28 @@ export class AdminService {
    * darian cuentas con seguridad distinta segun por donde entraron.
    */
   /**
-   * Techo de los roles `organizer` y `osi` (ver `ROLES_ADMINISTRABLES`).
+   * Techo de quien administra cuentas.
    *
-   * Un organizador administra corredores y nada mas: no puede tocar la cuenta
-   * de un admin ni de otro organizador, ni repartir esos roles. Un osi llega
-   * hasta organizadores y otros osi, pero nunca a un admin. Sin esta
-   * comprobacion cualquiera de los dos podria darse `admin` a si mismo o
-   * resetear la contrasena del admin y entrar como el — el reset de
-   * contrasenas es una toma de cuenta con otro nombre.
+   * Con `usuarios.gestionar` a secas se atiende a corredoras y nada mas: no se
+   * puede tocar la cuenta de nadie del equipo ni repartir roles. Sin esta
+   * comprobacion cualquiera con ese permiso podria darse `admin` o resetear la
+   * contrasena de un admin y entrar como el — el reset de contrasenas es una
+   * toma de cuenta con otro nombre.
+   *
+   * `roles.asignar` levanta el techo: es el permiso del OSI, que da de alta al
+   * equipo, incluidos administradores. Nadie se cambia su propio rol, y el
+   * ultimo admin no se degrada ni se borra (ver `noDejarSinAdmin`).
    *
    * Va en el servicio y no en el guard porque lo que decide no es el endpoint
    * sino **sobre quien** se ejecuta, y eso solo se sabe leyendo el objetivo.
    */
-  private techoDeRol(actorRole: UserRole, objetivo?: UserRole, rolPedido?: UserRole) {
-    const permitidos = ROLES_ADMINISTRABLES[actorRole];
-    if (!permitidos) return;
+  private async techoDeRol(actorRole: UserRole, objetivo?: string, rolPedido?: string) {
+    if (rolPedido && !(await this.prisma.role.findUnique({ where: { key: rolPedido }, select: { key: true } }))) {
+      throw new AppException(ErrorCode.VALIDATION_ERROR, 'Ese rol no existe', HttpStatus.BAD_REQUEST);
+    }
+    if (this.permisos.tiene(actorRole, 'roles.asignar')) return;
 
-    if (objetivo && !permitidos.includes(objetivo)) {
+    if (objetivo && objetivo !== UserRole.runner) {
       throw new AppException(
         ErrorCode.INSUFFICIENT_ROLE,
         'Tu rol no puede administrar esta cuenta',
@@ -1732,7 +1732,7 @@ export class AdminService {
       );
     }
 
-    if (rolPedido && !permitidos.includes(rolPedido)) {
+    if (rolPedido && rolPedido !== UserRole.runner) {
       throw new AppException(
         ErrorCode.INSUFFICIENT_ROLE,
         'Tu rol no puede asignar ese rol',
@@ -1741,8 +1741,35 @@ export class AdminService {
     }
   }
 
+  /**
+   * Que siempre quede alguien que pueda gestionar roles.
+   *
+   * No hay superusuario: ni `admin` tiene permisos que no se le puedan quitar.
+   * Lo que evita quedarse fuera es esta regla: ningun cambio (de rol de una
+   * persona, de permisos de un rol, un borrado) puede dejar sin nadie activo con
+   * `roles.gestionar`, porque recuperarlo exigiria tocar la base a mano.
+   */
+  private async noDejarSinGestor(cambio: { userId?: string; roleKey?: string; permisosNuevos?: string[] }) {
+    const roles = await this.prisma.role.findMany({ select: { key: true, permissions: true } });
+    const gestoras = roles
+      .filter((r) =>
+        (r.key === cambio.roleKey && cambio.permisosNuevos ? cambio.permisosNuevos : r.permissions).includes('roles.gestionar'),
+      )
+      .map((r) => r.key);
+    const quedan = await this.prisma.user.count({
+      where: { deletedAt: null, role: { in: gestoras }, ...(cambio.userId ? { id: { not: cambio.userId } } : {}) },
+    });
+    if (quedan === 0) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        'Nadie más podría gestionar roles: dale ese permiso a otra persona antes',
+        HttpStatus.CONFLICT,
+      );
+    }
+  }
+
   async crearUsuario(dto: CreateUserDto, actorRole: UserRole) {
-    this.techoDeRol(actorRole, undefined, dto.role);
+    await this.techoDeRol(actorRole, undefined, dto.role);
 
     const existente = await this.prisma.user.findUnique({
       where: { email: dto.email },
@@ -1792,7 +1819,10 @@ export class AdminService {
   ) {
     const actual = await this.buscarUsuario(userId);
 
-    this.techoDeRol(actorRole, actual.role, dto.role);
+    await this.techoDeRol(actorRole, actual.role, dto.role);
+    if (dto.role && this.permisos.tiene(actual.role, 'roles.gestionar') && !this.permisos.tiene(dto.role, 'roles.gestionar')) {
+      await this.noDejarSinGestor({ userId });
+    }
 
     if (dto.role && dto.role !== actorRole && userId === adminUserId) {
       throw new AppException(
@@ -1843,7 +1873,7 @@ export class AdminService {
   async cambiarPassword(userId: string, password: string, actorRole: UserRole) {
     const usuario = await this.buscarUsuario(userId);
 
-    this.techoDeRol(actorRole, usuario.role);
+    await this.techoDeRol(actorRole, usuario.role);
 
     await this.prisma.user.update({
       where: { id: userId },
@@ -1883,13 +1913,159 @@ export class AdminService {
     }
 
     const usuario = await this.buscarUsuario(userId);
-    this.techoDeRol(actorRole, usuario.role);
+    await this.techoDeRol(actorRole, usuario.role);
+    if (this.permisos.tiene(usuario.role, 'roles.gestionar')) await this.noDejarSinGestor({ userId });
 
     await this.users.borrarCuenta(userId);
 
     this.logger.warn(`Cuenta ${usuario.email} borrada desde el panel por ${adminUserId}`);
 
     return { deleted: true, email: usuario.email };
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Roles y permisos
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** Lo que el panel necesita para decidir que mostrar: rol y permisos efectivos. */
+  async miAcceso(userId: string, roleKey: UserRole) {
+    const rol = await this.prisma.role.findUnique({ where: { key: roleKey }, select: { name: true } });
+    const usuario = await this.prisma.user.findUnique({ where: { id: userId }, select: { name: true, email: true } });
+    return { role: roleKey, roleName: rol?.name ?? roleKey, permissions: this.permisos.de(roleKey), user: usuario };
+  }
+
+  /** Roles con cuantas personas tiene cada uno, y el catalogo para pintar la matriz. */
+  async listarRoles() {
+    const roles = await this.prisma.role.findMany({
+      orderBy: [{ system: 'desc' }, { createdAt: 'asc' }],
+      include: { _count: { select: { users: { where: { deletedAt: null } } } } },
+    });
+    return {
+      modules: MODULOS,
+      roles: roles.map((r) => ({
+        key: r.key,
+        name: r.name,
+        description: r.description,
+        system: r.system,
+        permissions: this.permisos.de(r.key),
+        users: r._count.users,
+      })),
+    };
+  }
+
+  async crearRol(dto: CreateRoleDto) {
+    if (await this.prisma.role.findUnique({ where: { key: dto.key }, select: { key: true } })) {
+      throw new AppException(ErrorCode.CONFLICT, 'Ya existe un rol con esa clave', HttpStatus.CONFLICT);
+    }
+    await this.prisma.role.create({
+      data: { key: dto.key, name: dto.name, description: dto.description ?? null, permissions: [...new Set(dto.permissions)] },
+    });
+    await this.permisos.recargar();
+    this.logger.log(`Rol ${dto.key} creado`);
+    return this.listarRoles();
+  }
+
+  /**
+   * Edita un rol. Nadie toca los permisos **de su propio rol**: con
+   * `roles.gestionar` cualquiera podria darse todo lo demas. Que lo haga otra
+   * persona con ese permiso (separacion de funciones).
+   */
+  async editarRol(key: string, dto: UpdateRoleDto, actorRole: UserRole) {
+    const rol = await this.prisma.role.findUnique({ where: { key } });
+    if (!rol) throw new AppException(ErrorCode.NOT_FOUND, 'El rol no existe', HttpStatus.NOT_FOUND);
+    if (dto.permissions && key === actorRole && !igualesSinOrden(dto.permissions, rol.permissions)) {
+      throw new AppException(
+        ErrorCode.INSUFFICIENT_ROLE,
+        'No podés cambiar los permisos de tu propio rol: pedíselo a otra persona que gestione roles',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    if (dto.permissions && rol.permissions.includes('roles.gestionar') && !dto.permissions.includes('roles.gestionar')) {
+      await this.noDejarSinGestor({ roleKey: key, permisosNuevos: dto.permissions });
+    }
+    await this.prisma.role.update({
+      where: { key },
+      data: {
+        ...camposPresentes(dto, ['name', 'description']),
+        ...(dto.permissions ? { permissions: [...new Set(dto.permissions)] } : {}),
+      },
+    });
+    await this.permisos.recargar();
+    this.logger.log(`Rol ${key} editado`);
+    return this.listarRoles();
+  }
+
+  async borrarRol(key: string) {
+    const rol = await this.prisma.role.findUnique({
+      where: { key },
+      include: { _count: { select: { users: true } } },
+    });
+    if (!rol) throw new AppException(ErrorCode.NOT_FOUND, 'El rol no existe', HttpStatus.NOT_FOUND);
+    if (rol.system) throw new AppException(ErrorCode.CONFLICT, 'Los roles de serie no se borran', HttpStatus.CONFLICT);
+    if (rol._count.users > 0) {
+      throw new AppException(
+        ErrorCode.CONFLICT,
+        `Hay ${rol._count.users} persona(s) con este rol: reasignalas antes de borrarlo`,
+        HttpStatus.CONFLICT,
+      );
+    }
+    await this.prisma.role.delete({ where: { key } });
+    await this.permisos.recargar();
+    this.logger.warn(`Rol ${key} borrado`);
+    return this.listarRoles();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  //  Auditoria
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /** El registro de cambios, del mas nuevo al mas viejo. Solo lectura: no hay endpoint que lo edite. */
+  async listarAuditoria(filtros: { q?: string; resultado?: 'ok' | 'error' | 'denegado'; page?: number; pageSize?: number }) {
+    const pageSize = Math.min(100, Math.max(1, filtros.pageSize ?? 30));
+    const page = Math.max(1, filtros.page ?? 1);
+    const where: Prisma.AuditLogWhereInput = {
+      ...(filtros.resultado === 'ok' ? { status: { lt: 400 } } : {}),
+      ...(filtros.resultado === 'error' ? { status: { gte: 400, not: 403 } } : {}),
+      ...(filtros.resultado === 'denegado' ? { status: 403 } : {}),
+      ...(filtros.q
+        ? {
+            OR: [
+              { route: { contains: filtros.q, mode: 'insensitive' } },
+              { actorRole: { contains: filtros.q, mode: 'insensitive' } },
+              { actor: { is: { email: { contains: filtros.q, mode: 'insensitive' } } } },
+              { actor: { is: { name: { contains: filtros.q, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+    };
+    const [total, filas] = await this.prisma.$transaction([
+      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        include: { actor: { select: { name: true, email: true } } },
+      }),
+    ]);
+    return new Paginated(
+      filas.map((f) => ({
+        id: f.id,
+        at: f.createdAt.toISOString(),
+        actor: f.actor ? { name: f.actor.name, email: f.actor.email } : null,
+        actorRole: f.actorRole,
+        method: f.method,
+        route: f.route,
+        targetId: f.targetId,
+        status: f.status,
+        detail: f.detail,
+        ip: f.ip,
+      })),
+      null,
+      total,
+      page,
+      pageSize,
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────

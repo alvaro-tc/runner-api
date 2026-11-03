@@ -22,17 +22,50 @@ datasource db {
 //  ENUMS
 // ═══════════════════════════════════════════════════════════════════════════
 
-enum UserRole {
-  runner
-  // Admin recortado: gestiona corredores y valida los cobros. Ve las maratones
-  // y su mapa en vivo —sin eso no sabria a que carrera pertenece el pago que
-  // esta validando— pero no las crea, ni las edita, ni les da la largada.
-  // Ver docs/api.md, seccion Administracion.
-  organizer
-  // Oficial de Seguridad de la Informacion: solo administra cuentas. Toca
-  // corredores, organizadores y otros osi; nunca a un admin ni ese rol.
-  osi
-  admin
+/// Rol de un usuario. Ya no es un enum: los roles viven en la tabla `roles`
+/// para que el panel pueda crear roles nuevos (p. ej. `veedor`) y repartir
+/// permisos por modulo. Los cuatro de siempre (`runner`, `organizer`, `osi`,
+/// `admin`) siguen existiendo como filas `system`, con la misma clave, asi que
+/// el token, la app Flutter y `user.role === 'admin'` no cambian.
+model Role {
+  /// Clave estable: es lo que va en `users.role` y en el token.
+  key         String   @id
+  name        String
+  description String?
+  /// Claves del catalogo `src/modules/auth/permisos.ts` (`carreras.ver`, ...).
+  /// Ningun rol las tiene implicitas, tampoco `admin`: todo es revocable.
+  permissions String[] @default([])
+  /// Los de serie: no se borran y su clave no cambia.
+  system      Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+
+  @@map("roles")
+}
+
+/// Registro de auditoria: cada cambio hecho desde el panel (POST/PUT/DELETE de
+/// `/admin/*` y comprobantes), con quien, sobre que y con que resultado. Solo se
+/// escribe; nadie lo edita ni lo borra desde la API.
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  /// El rol con el que actuo: si despues se lo cambian, el registro no miente.
+  actorRole String?
+  method    String
+  /// La ruta como patron (`/admin/users/:id`), no la URL: agrupa y no filtra ids.
+  route     String
+  targetId  String?
+  status    Int
+  /// El cuerpo de la peticion sin secretos (contrasenas, tokens).
+  detail    Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
 }
 
 enum Gender {
@@ -214,7 +247,8 @@ model User {
   /// revocarlo con el mismo con el que se canjeo.
   appleClientId      String?
   name               String
-  role               UserRole  @default(runner)
+  role               String    @default("runner")
+  roleDef            Role      @relation(fields: [role], references: [key], onUpdate: Cascade)
   emailVerifiedAt    DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -237,6 +271,7 @@ model User {
   paymentsConfirmed   Payment[]            @relation("PaymentConfirmedBy")
   paymentsRefunded    Payment[]            @relation("PaymentRefundedBy")
   notifications       Notification[]
+  auditLogs           AuditLog[]
 
   @@index([role])
   @@map("users")

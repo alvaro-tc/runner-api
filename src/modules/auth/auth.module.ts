@@ -11,6 +11,7 @@ import { AppleVerifier } from './social/apple.verifier';
 import { AppleClient } from './social/apple.client';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { RolesGuard } from './guards/roles.guard';
+import { PermisosService } from './permisos.service';
 
 @Module({
   imports: [
@@ -40,6 +41,7 @@ import { RolesGuard } from './guards/roles.guard';
     GoogleVerifier,
     AppleVerifier,
     AppleClient,
+    PermisosService,
     // ORDEN IMPORTANTE: throttler primero (rechaza antes de tocar la base),
     // luego JWT (deja `req.user`), luego roles (que lo necesita puesto).
     { provide: APP_GUARD, useClass: ThrottlerGuard },
@@ -48,6 +50,6 @@ import { RolesGuard } from './guards/roles.guard';
   ],
   // `AppleClient` sale del modulo porque borrar una cuenta —en usuarios— tiene
   // que revocar su token de Apple.
-  exports: [TokenService, AuthService, AppleClient],
+  exports: [TokenService, AuthService, AppleClient, PermisosService],
 })
 export class AuthModule {}

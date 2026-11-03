@@ -1,6 +1,8 @@
 import * as argon2 from 'argon2';
 import { log, prisma, titulo } from './comun';
-import type { Gender, UserRole } from '../../generated/prisma/enums';
+import type { Gender } from '../../generated/prisma/enums';
+
+type UserRole = string;
 
 /**
  * Contrasena unica para todos los usuarios de prueba.

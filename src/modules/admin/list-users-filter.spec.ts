@@ -1,5 +1,5 @@
 import { AdminService } from './admin.service';
-import { UserRole } from '../../../generated/prisma/enums';
+import { UserRole, permisosEfectivos } from '../auth/permisos';
 import type { ListUsersQueryDto } from './dto/admin.dto';
 
 /**
@@ -14,7 +14,12 @@ import type { ListUsersQueryDto } from './dto/admin.dto';
 describe('listado de usuarios del panel', () => {
   const count = jest.fn().mockResolvedValue(7);
   const findMany = jest.fn().mockResolvedValue([]);
+  const matriz: Record<string, string[]> = {
+    organizer: ['usuarios.ver', 'usuarios.gestionar'],
+    osi: ['usuarios.ver', 'usuarios.gestionar', 'roles.asignar'],
+  };
   const admin = Object.assign(Object.create(AdminService.prototype) as object, {
+    permisos: { tiene: (r: string, p: string) => permisosEfectivos(matriz[r]).includes(p) },
     prisma: {
       user: { count, findMany },
       // El servicio pide count y findMany en una transaccion; aqui basta con
@@ -47,25 +52,20 @@ describe('listado de usuarios del panel', () => {
   // El techo del organizador aplicado a mirar, no solo a editar. Si el rol del
   // actor no llega al `where`, un organizador se lista los admins con sus
   // correos: justo las cuentas que `techoDeRol` le impide tocar.
-  it('a un organizador solo le lista corredores, pida el rol que pida', async () => {
+  it('sin roles.asignar solo le lista corredoras, pida el rol que pida', async () => {
     await listar({ role: 'admin' }, UserRole.organizer);
-    expect(consulta().where).toEqual({ role: { in: ['runner'] } });
+    expect(consulta().where).toEqual({ role: 'runner' });
   });
 
-  // Mismo techo para el osi: todo menos admins.
-  it('a un osi no le lista admins, ni pidiendolos', async () => {
+  // El osi da de alta al equipo (incluidos admins): tiene que poder verlo.
+  it('con roles.asignar le respeta el filtro, incluido admin', async () => {
     await listar({ role: 'admin' }, UserRole.osi);
-    expect(consulta().where).toEqual({ role: { in: ['runner', 'organizer', 'osi'] } });
-  });
-
-  it('a un osi le respeta un filtro que si alcanza', async () => {
-    await listar({ role: 'organizer' }, UserRole.osi);
-    expect(consulta().where).toEqual({ role: 'organizer' });
-  });
-
-  it('a un admin le respeta el filtro que pidio', async () => {
-    await listar({ role: 'admin' }, UserRole.admin);
     expect(consulta().where).toEqual({ role: 'admin' });
+  });
+
+  it('a un admin sin roles.asignar tambien lo limita a corredoras', async () => {
+    await listar({ role: 'admin' }, UserRole.admin);
+    expect(consulta().where).toEqual({ role: 'runner' });
   });
 
   it('cuenta con el mismo where con el que lista', async () => {

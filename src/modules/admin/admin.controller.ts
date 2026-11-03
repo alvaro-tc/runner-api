@@ -31,8 +31,10 @@ import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
 import { ErrorResponseDto } from '../../common/dto/response-envelope';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
-import { Roles } from '../auth/decorators/roles.decorator';
-import { PaymentStatus, RegistrationStatus, UserRole } from '../../../generated/prisma/enums';
+import { Permiso } from '../auth/decorators/roles.decorator';
+import { PaymentStatus, RegistrationStatus } from '../../../generated/prisma/enums';
+import { NADIE, UserRole } from '../auth/permisos';
+import { AuditoriaInterceptor } from './auditoria.interceptor';
 import {
   CreateRouteDto,
   ListRoutesQueryDto,
@@ -61,6 +63,8 @@ import {
   UpdateExtraDto,
   UpdateMarathonDto,
   UpdateUserDto,
+  CreateRoleDto,
+  UpdateRoleDto,
 } from './dto/admin.dto';
 
 /**
@@ -99,8 +103,9 @@ const LIMITE_ADMIN = { corto: { limit: 60, ttl: 60_000 } };
  */
 @ApiTags('admin')
 @ApiBearerAuth('access-token')
-@Roles('admin')
+@Permiso(NADIE)
 @Throttle(LIMITE_ADMIN)
+@UseInterceptors(AuditoriaInterceptor)
 @Controller('admin')
 export class AdminController {
   constructor(private readonly admin: AdminService) {}
@@ -108,6 +113,7 @@ export class AdminController {
   // ─── Cargo por servicio ──────────────────────────────────────────────────
 
   @Get('service-fee')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Config global del cargo por servicio y las maratones que la sobrescriben',
   })
@@ -116,6 +122,7 @@ export class AdminController {
   }
 
   @Put('service-fee')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Activar, desactivar o reconfigurar el cargo global',
     description:
@@ -127,6 +134,7 @@ export class AdminController {
   }
 
   @Get('service-fee/preview')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Vista previa del efecto sobre un total de ejemplo',
     description:
@@ -139,6 +147,7 @@ export class AdminController {
   }
 
   @Put('marathons/:id/service-fee')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Override del cargo para una maratón',
     description:
@@ -154,6 +163,7 @@ export class AdminController {
   }
 
   @Delete('marathons/:id/service-fee')
+  @Permiso('config.gestionar')
   @ApiOperation({ summary: 'Quitar el override y volver a la config global' })
   quitarFeeDeMaraton(@Param('id') id: string) {
     return this.admin.quitarFeeDeMaraton(id);
@@ -162,6 +172,7 @@ export class AdminController {
   // ─── Recorridos preestablecidos ──────────────────────────────────────────
 
   @Get('routes')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Recorridos cargados, archivados incluidos',
     description:
@@ -177,6 +188,7 @@ export class AdminController {
   }
 
   @Get('routes/:id')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Un recorrido con su trazado sin simplificar',
     description:
@@ -190,6 +202,7 @@ export class AdminController {
   }
 
   @Post('routes')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Cargar un recorrido',
     description:
@@ -207,6 +220,7 @@ export class AdminController {
   }
 
   @Put('routes/:id')
+  @Permiso('config.gestionar')
   @ApiOperation({
     summary: 'Editar o archivar un recorrido',
     description:
@@ -219,6 +233,7 @@ export class AdminController {
   }
 
   @Delete('routes/:id')
+  @Permiso('config.gestionar')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Borrar un recorrido que ninguna maratón usó',
@@ -232,7 +247,7 @@ export class AdminController {
   // ─── Maratones ───────────────────────────────────────────────────────────
 
   @Get('marathons')
-  @Roles('admin', 'organizer')
+  @Permiso('carreras.ver')
   @ApiOperation({
     summary: 'Maratones, publicadas y borradores',
     description:
@@ -245,6 +260,7 @@ export class AdminController {
   }
 
   @Post('marathons')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Crear una maratón',
     description:
@@ -260,6 +276,7 @@ export class AdminController {
   }
 
   @Get('marathons/:id/stats')
+  @Permiso('resumen.ver')
   @ApiOperation({
     summary: 'Metricas de una maratón para el resumen del admin',
     description:
@@ -274,7 +291,7 @@ export class AdminController {
   }
 
   @Get('marathons/:id')
-  @Roles('admin', 'organizer')
+  @Permiso('carreras.ver')
   @ApiOperation({
     summary: 'Detalle completo, con categorías y extras',
     description: 'Es lo que rellena el formulario de edición. Trae borradores, como todo aquí.',
@@ -285,6 +302,7 @@ export class AdminController {
   }
 
   @Put('marathons/:id')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Editar una maratón',
     description:
@@ -296,6 +314,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/qr')
+  @Permiso('carreras.editar')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -325,6 +344,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/cover')
+  @Permiso('carreras.editar')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -355,6 +375,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/logo/:variant')
+  @Permiso('carreras.editar')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 12 * 1024 * 1024, files: 1 } }))
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -390,6 +411,7 @@ export class AdminController {
   }
 
   @Delete('marathons/:id')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Borrar una maratón sin inscritos',
     description:
@@ -404,18 +426,21 @@ export class AdminController {
   // ─── Categorías y extras ─────────────────────────────────────────────────
 
   @Post('marathons/:id/categories')
+  @Permiso('carreras.editar')
   @ApiOperation({ summary: 'Agregar una categoría a una maratón' })
   crearCategoria(@Param('id') id: string, @Body() dto: CreateCategoryDto) {
     return this.admin.crearCategoria(id, dto);
   }
 
   @Put('categories/:categoryId')
+  @Permiso('carreras.editar')
   @ApiOperation({ summary: 'Editar una categoría' })
   editarCategoria(@Param('categoryId') categoryId: string, @Body() dto: UpdateCategoryDto) {
     return this.admin.actualizarCategoria(categoryId, dto);
   }
 
   @Delete('categories/:categoryId')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Borrar una categoría',
     description:
@@ -427,18 +452,21 @@ export class AdminController {
   }
 
   @Post('marathons/:id/extras')
+  @Permiso('carreras.editar')
   @ApiOperation({ summary: 'Agregar un adicional comprable' })
   crearExtra(@Param('id') id: string, @Body() dto: CreateExtraDto) {
     return this.admin.crearExtra(id, dto);
   }
 
   @Put('extras/:extraId')
+  @Permiso('carreras.editar')
   @ApiOperation({ summary: 'Editar un adicional', description: '`stock: null` = sin límite' })
   editarExtra(@Param('extraId') extraId: string, @Body() dto: UpdateExtraDto) {
     return this.admin.actualizarExtra(extraId, dto);
   }
 
   @Delete('extras/:extraId')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Borrar un adicional',
     description:
@@ -450,6 +478,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/publish')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Publicar una maratón en el catálogo' })
   publicar(@Param('id') id: string) {
@@ -457,6 +486,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/unpublish')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sacarla del catálogo',
@@ -471,6 +501,7 @@ export class AdminController {
   // ─── Largada en vivo ─────────────────────────────────────────────────────
 
   @Post('marathons/:id/rehearsal')
+  @Permiso('carreras.editar')
   @ApiOperation({
     summary: 'Crear un ensayo de la maratón',
     description:
@@ -485,6 +516,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/reset-live')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Reiniciar el estado en vivo',
@@ -498,6 +530,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/prepare')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Poner la maratón "en preparación"',
@@ -513,6 +546,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/cancel-preparation')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Sacarla de preparación',
@@ -525,6 +559,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/start')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Dar la largada',
@@ -538,6 +573,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/finish')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Cortar la carrera',
@@ -550,7 +586,7 @@ export class AdminController {
   }
 
   @Get('marathons/:id/live')
-  @Roles('admin', 'organizer')
+  @Permiso('carreras.ver')
   @ApiOperation({
     summary: 'Foto de dónde va cada corredor ahora mismo',
     description:
@@ -562,6 +598,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/close-registrations')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Cerrar las inscripciones y recalcular el estado',
@@ -574,6 +611,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/reopen-registrations')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Reabrir las inscripciones',
@@ -591,7 +629,7 @@ export class AdminController {
    * organizador le de a un enlace y le salga el archivo.
    */
   @Get('marathons/:id/registrants.csv')
-  @Roles('admin', 'organizer')
+  @Permiso('inscritas.exportar')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @ApiOperation({
     summary: 'Exportar los inscritos a CSV',
@@ -610,7 +648,7 @@ export class AdminController {
   // ─── Inscripciones y pagos ───────────────────────────────────────────────
 
   @Get('registrations')
-  @Roles('admin', 'organizer')
+  @Permiso('inscritas.ver')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: RegistrationStatus })
   @ApiQuery({
@@ -644,7 +682,7 @@ export class AdminController {
   }
 
   @Get('payments')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.ver')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
   @ApiQuery({
@@ -680,7 +718,7 @@ export class AdminController {
   }
 
   @Get('payments/pending-transfers')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.ver')
   @ApiOperation({
     summary: 'Cobros esperando confirmación manual',
     description:
@@ -698,7 +736,7 @@ export class AdminController {
    * que el navegador lo descargue con solo un enlace.
    */
   @Get('payments.csv')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.ver')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   @ApiQuery({ name: 'marathonId', required: false })
   @ApiQuery({ name: 'status', required: false, enum: PaymentStatus })
@@ -721,7 +759,7 @@ export class AdminController {
 
   // Despues de `pending-transfers`: declarado antes, `:id` se lo tragaria.
   @Get('payments/:id')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.ver')
   @ApiOperation({
     summary: 'Un ticket por id',
     description:
@@ -733,7 +771,7 @@ export class AdminController {
   }
 
   @Post('payments/:id/confirm-transfer')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.validar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Dar por cobrada una transferencia bancaria',
@@ -752,7 +790,7 @@ export class AdminController {
   }
 
   @Post('payments/:id/refund')
-  @Roles('admin', 'organizer')
+  @Permiso('cobros.validar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Devolver un cobro y anular la inscripción',
@@ -775,6 +813,7 @@ export class AdminController {
   // ─── Resultados ──────────────────────────────────────────────────────────
 
   @Post('marathons/:id/results')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Cargar los tiempos de una carrera y recalcular puestos',
@@ -789,6 +828,7 @@ export class AdminController {
   }
 
   @Post('marathons/:id/recalculate-ranks')
+  @Permiso('carreras.editar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Recalcular puestos sin tocar tiempos',
@@ -798,10 +838,80 @@ export class AdminController {
     return this.admin.recalcularPuestos(id);
   }
 
+  // ─── Roles y permisos ─────────────────────────────────────────────────────
+
+  @Get('me')
+  @Permiso()
+  @ApiOperation({
+    summary: 'Mi rol y mis permisos',
+    description: 'El panel lo pide al entrar para decidir qué módulos mostrar. Abierto a cualquier sesión.',
+  })
+  miAcceso(@CurrentUser('sub') userId: string, @CurrentUser('role') role: UserRole) {
+    return this.admin.miAcceso(userId, role);
+  }
+
+  @Get('roles')
+  @Permiso('usuarios.ver')
+  @ApiOperation({
+    summary: 'Roles, sus permisos y el catálogo de módulos',
+    description: 'Lo usa la matriz de permisos y el selector de rol al crear o editar una cuenta.',
+  })
+  listarRoles() {
+    return this.admin.listarRoles();
+  }
+
+  @Post('roles')
+  @Permiso('roles.gestionar')
+  @ApiOperation({ summary: 'Crear un rol', description: 'Devuelve la lista de roles actualizada.' })
+  crearRol(@Body() dto: CreateRoleDto) {
+    return this.admin.crearRol(dto);
+  }
+
+  @Put('roles/:key')
+  @Permiso('roles.gestionar')
+  @ApiOperation({
+    summary: 'Editar nombre, descripción o permisos de un rol',
+    description:
+      'Surte efecto en el acto. Ningún rol es fijo, tampoco `admin`. No se pueden cambiar los ' +
+      'permisos del propio rol, ni dejar sin nadie que pueda gestionar roles.',
+  })
+  editarRol(@CurrentUser('role') actorRole: UserRole, @Param('key') key: string, @Body() dto: UpdateRoleDto) {
+    return this.admin.editarRol(key, dto, actorRole);
+  }
+
+  @Get('audit')
+  @Permiso('auditoria.ver')
+  @ApiOperation({
+    summary: 'Registro de auditoría',
+    description:
+      'Cada escritura del panel (y cada acceso denegado), con quién, rol, ruta, objetivo, ' +
+      'resultado y el cuerpo sin secretos. `resultado`: `ok`, `error` o `denegado`. Paginado.',
+  })
+  listarAuditoria(
+    @Query('q') q?: string,
+    @Query('resultado') resultado?: 'ok' | 'error' | 'denegado',
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+  ) {
+    return this.admin.listarAuditoria({
+      q: q?.trim().slice(0, 120) || undefined,
+      resultado: ['ok', 'error', 'denegado'].includes(resultado ?? '') ? resultado : undefined,
+      page: parseInt(page || '1', 10) || 1,
+      pageSize: parseInt(pageSize || '30', 10) || 30,
+    });
+  }
+
+  @Delete('roles/:key')
+  @Permiso('roles.gestionar')
+  @ApiOperation({ summary: 'Borrar un rol', description: 'Solo roles creados en el panel y sin personas asignadas.' })
+  borrarRol(@Param('key') key: string) {
+    return this.admin.borrarRol(key);
+  }
+
   // ─── Usuarios ────────────────────────────────────────────────────────────
 
   @Get('users')
-  @Roles('admin', 'organizer', 'osi')
+  @Permiso('usuarios.ver')
   @ApiOperation({
     summary: 'Usuarios, sin datos sensibles',
     description:
@@ -817,7 +927,7 @@ export class AdminController {
     return this.admin.listarUsuarios(query, actorRole);
   }
   @Post('users')
-  @Roles('admin', 'organizer', 'osi')
+  @Permiso('usuarios.gestionar')
   @ApiOperation({
     summary: 'Crear una cuenta',
     description:
@@ -832,7 +942,7 @@ export class AdminController {
   }
 
   @Put('users/:id')
-  @Roles('admin', 'organizer', 'osi')
+  @Permiso('usuarios.gestionar')
   @ApiOperation({
     summary: 'Editar nombre, email, rol o verificación',
     description:
@@ -850,7 +960,7 @@ export class AdminController {
   }
 
   @Post('users/:id/password')
-  @Roles('admin', 'organizer', 'osi')
+  @Permiso('usuarios.gestionar')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Ponerle una contraseña nueva a alguien',
@@ -867,7 +977,7 @@ export class AdminController {
   }
 
   @Delete('users/:id')
-  @Roles('admin', 'osi')
+  @Permiso('usuarios.gestionar')
   @ApiOperation({
     summary: 'Borrar una cuenta',
     description:

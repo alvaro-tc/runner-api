@@ -1,63 +1,61 @@
 import { HttpStatus } from '@nestjs/common';
-import type { UserRole } from '../../../generated/prisma/enums';
 import type { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
+import { permisosEfectivos } from '../auth/permisos';
 import { AdminService } from './admin.service';
 
 /**
- * El techo de los roles `organizer` y `osi`.
+ * El techo de quien administra cuentas.
  *
- * Se prueba solo esta funcion —sin base ni modulo— porque es la unica que
- * separa "administrar corredores" de una toma de cuenta: resetear la
- * contrasena de un admin es entrar como el. Si se rompe, nada falla a la
- * vista; simplemente el organizador puede mas de lo que debe.
+ * Es lo unico que separa "atender corredoras" de una toma de cuenta: resetear
+ * la contrasena de un admin es entrar como el. Si se rompe, nada falla a la
+ * vista; simplemente alguien puede mas de lo que debe.
  */
-describe('techo del rol organizer', () => {
-  // Solo se ejerce un metodo privado y puro: las dependencias no se tocan.
-  const admin = Object.create(AdminService.prototype) as AdminService;
-  const techo = (actor: UserRole, objetivo?: UserRole, pedido?: UserRole) =>
-    (
-      admin as unknown as { techoDeRol: (a: UserRole, o?: UserRole, p?: UserRole) => void }
-    ).techoDeRol(actor, objetivo, pedido);
+describe('techo de usuarios.gestionar / roles.asignar', () => {
+  const matriz: Record<string, string[]> = {
+    admin: ['usuarios.ver', 'usuarios.gestionar', 'carreras.editar'],
+    organizer: ['usuarios.ver', 'usuarios.gestionar'],
+    osi: ['usuarios.ver', 'usuarios.gestionar', 'roles.asignar', 'roles.gestionar'],
+  };
+  const roles = new Set(['runner', 'organizer', 'osi', 'admin', 'veedor']);
+  const admin = Object.assign(Object.create(AdminService.prototype) as object, {
+    permisos: { tiene: (r: string, p: string) => permisosEfectivos(matriz[r]).includes(p) },
+    prisma: { role: { findUnique: ({ where }: { where: { key: string } }) => Promise.resolve(roles.has(where.key) ? { key: where.key } : null) } },
+  }) as unknown as AdminService;
+  const techo = (actor: string, objetivo?: string, pedido?: string) =>
+    (admin as unknown as { techoDeRol: (a: string, o?: string, p?: string) => Promise<void> }).techoDeRol(actor, objetivo, pedido);
 
-  function niega(fn: () => void) {
-    try {
-      fn();
-    } catch (e) {
-      const err = e as AppException;
-      expect(err.code).toBe(ErrorCode.INSUFFICIENT_ROLE);
-      expect(err.getStatus()).toBe(HttpStatus.FORBIDDEN);
-      return;
-    }
-    throw new Error('deberia haber sido rechazado');
+  async function niega(p: Promise<void>, code: string = ErrorCode.INSUFFICIENT_ROLE) {
+    const err = (await p.then(() => null, (e: unknown) => e)) as AppException | null;
+    expect(err).not.toBeNull();
+    expect(err!.code).toBe(code);
   }
 
-  it('al admin no le pone ningun techo', () => {
-    expect(() => techo('admin', 'admin', 'admin')).not.toThrow();
+  // Admin no es superusuario: sin roles.asignar tiene el mismo techo que cualquiera.
+  it('a un admin sin roles.asignar tambien le pone techo', async () => {
+    await expect(techo('admin', 'runner', 'runner')).resolves.toBeUndefined();
+    await niega(techo('admin', 'runner', 'admin'));
+    await niega(techo('admin', 'osi'));
   });
 
-  it('deja al organizador administrar corredores', () => {
-    expect(() => techo('organizer', 'runner', 'runner')).not.toThrow();
+  it('deja al organizador administrar corredoras', async () => {
+    await expect(techo('organizer', 'runner', 'runner')).resolves.toBeUndefined();
   });
 
-  it('no lo deja tocar la cuenta de un admin ni la de otro organizador', () => {
-    niega(() => techo('organizer', 'admin'));
-    niega(() => techo('organizer', 'organizer'));
+  it('no deja al organizador tocar cuentas del equipo ni repartir roles', async () => {
+    await niega(techo('organizer', 'admin'));
+    await niega(techo('organizer', 'veedor'));
+    await niega(techo('organizer', 'runner', 'admin'));
+    await niega(techo('organizer', 'runner', 'veedor'));
   });
 
-  it('no lo deja repartir roles que no sean corredor', () => {
-    niega(() => techo('organizer', 'runner', 'admin'));
-    niega(() => techo('organizer', 'runner', 'organizer'));
+  it('el osi (roles.asignar) reparte cualquier rol, incluido admin', async () => {
+    await expect(techo('osi', 'runner', 'admin')).resolves.toBeUndefined();
+    await expect(techo('osi', 'admin', 'veedor')).resolves.toBeUndefined();
   });
 
-  it('deja al osi administrar corredores, organizadores y otros osi', () => {
-    expect(() => techo('osi', 'runner', 'organizer')).not.toThrow();
-    expect(() => techo('osi', 'organizer', 'osi')).not.toThrow();
-    expect(() => techo('osi', 'osi', 'runner')).not.toThrow();
-  });
-
-  it('no deja al osi tocar a un admin ni repartir ese rol', () => {
-    niega(() => techo('osi', 'admin'));
-    niega(() => techo('osi', 'runner', 'admin'));
+  it('rechaza un rol que no existe', async () => {
+    const err = (await techo('osi', 'runner', 'inventado').then(() => null, (e: unknown) => e)) as AppException;
+    expect(err.getStatus()).toBe(HttpStatus.BAD_REQUEST);
   });
 });

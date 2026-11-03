@@ -1,4 +1,5 @@
-import { RegistrationStatus, UserRole } from '../../../generated/prisma/enums';
+import { RegistrationStatus } from '../../../generated/prisma/enums';
+import { UserRole } from '../auth/permisos';
 import { LiveGateway } from './live.gateway';
 
 describe('suscripcion del corredor', () => {
@@ -12,6 +13,7 @@ describe('suscripcion del corredor', () => {
   const gateway = Object.assign(Object.create(LiveGateway.prototype) as object, {
     prisma: { marathon: { count }, registration: { findFirst } },
     server: { to },
+    permisos: { tiene: (r: string) => r === 'admin' || r === 'organizer' },
   }) as unknown as LiveGateway;
 
   function client() {
