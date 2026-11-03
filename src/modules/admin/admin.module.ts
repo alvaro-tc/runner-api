@@ -9,6 +9,7 @@ import { AuthModule } from '../auth/auth.module';
 import { AdminController } from './admin.controller';
 import { AdminService } from './admin.service';
 import { PanelController } from './panel.controller';
+import { PlataformaController } from './plataforma.controller';
 
 /**
  * Administracion.
@@ -28,7 +29,7 @@ import { PanelController } from './panel.controller';
  */
 @Module({
   imports: [PricingModule, PaymentsModule, RacesModule, RoutesModule, UsersModule, RealtimeModule, AuthModule],
-  controllers: [AdminController, PanelController],
+  controllers: [AdminController, PanelController, PlataformaController],
   providers: [AdminService],
 })
 export class AdminModule {}

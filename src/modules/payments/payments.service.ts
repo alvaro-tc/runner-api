@@ -1,4 +1,4 @@
-import { HttpStatus, Inject, Injectable, Logger, forwardRef } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable, Logger, forwardRef, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AppException } from '../../common/errors/app.exception';
 import { ErrorCode } from '../../common/errors/error-codes';
@@ -17,6 +17,8 @@ import { StorageService } from '../storage/storage.service';
 import { glosaDe, intentoDeQrManual } from './manual-qr/qr-intent';
 import { PaymentProofService } from './manual-qr/payment-proof.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { PasarelaClient, aCentavos, type CobroPasarela } from './pasarela/pasarela.client';
+import { USUARIO_API } from '../auth/permisos';
 
 /**
  * Orquesta el paso 3: cobra y, si el cobro pasa, confirma la inscripcion.
@@ -34,9 +36,11 @@ import { NotificationsService } from '../notifications/notifications.service';
  *    orden en el que nadie termina cobrado y sin inscripcion.
  */
 @Injectable()
-export class PaymentsService {
+export class PaymentsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PaymentsService.name);
   private readonly recibosEnCurso = new Map<string, Promise<{ url: string }>>();
+  private sondeo?: ReturnType<typeof setInterval>;
+  private sondeando = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -50,7 +54,76 @@ export class PaymentsService {
     private readonly proofs: PaymentProofService,
     @Inject(PAYMENT_PROVIDER) private readonly provider: PaymentProvider,
     private readonly notifications: NotificationsService,
+    private readonly pasarela: PasarelaClient,
   ) {}
+
+  /**
+   * Sondea los cobros abiertos en la pasarela aunque nadie mire la pantalla:
+   * quien pago y cerro la app tiene que quedar inscrito igual.
+   * ponytail: un timer por proceso; con varias instancias, mover a una cola con lock.
+   */
+  onModuleInit(): void {
+    if (!this.pasarela.configurada) return;
+    this.sondeo = setInterval(() => void this.sondearPasarela(), 15_000);
+    this.sondeo.unref();
+  }
+
+  onModuleDestroy(): void {
+    clearInterval(this.sondeo);
+  }
+
+  private async sondearPasarela(): Promise<void> {
+    if (this.sondeando) return;
+    this.sondeando = true;
+    try {
+      const abiertos = await this.prisma.payment.findMany({
+        where: { provider: PaymentProviderName.pasarela, status: PaymentStatus.pending },
+        orderBy: { createdAt: 'asc' },
+        take: 50,
+      });
+      for (const pago of abiertos) await this.resolverPendiente(pago);
+    } catch (error) {
+      this.logger.error('No se pudo sondear la pasarela', error);
+    } finally {
+      this.sondeando = false;
+    }
+  }
+
+  /**
+   * Quien puede marcar a mano los cobros de esta carrera.
+   *
+   * - Cobro abierto por la pasarela: nadie, lo confirma la API.
+   * - Carrera asignada a un organizador: solo el.
+   * - Sin asignar, o asignada a la API pero este cobro es manual (la API estaba
+   *   apagada al abrirlo): cualquiera con `cobros.validar`.
+   */
+  async exigirValidador(paymentId: string, userId: string): Promise<void> {
+    const pago = await this.prisma.payment.findUnique({
+      where: { id: paymentId },
+      select: {
+        provider: true,
+        registration: {
+          select: { marathon: { select: { paymentValidator: { select: { id: true, name: true } } } } },
+        },
+      },
+    });
+    if (!pago) return; // el 404 lo da quien llama
+    if (pago.provider === PaymentProviderName.pasarela) {
+      throw new AppException(
+        ErrorCode.PAYMENT_VALIDATOR_MISMATCH,
+        'Este cobro lo valida la API de pagos: solo se puede ver',
+        HttpStatus.FORBIDDEN,
+      );
+    }
+    const validador = pago.registration.marathon.paymentValidator;
+    if (validador && validador.id !== USUARIO_API && validador.id !== userId) {
+      throw new AppException(
+        ErrorCode.PAYMENT_VALIDATOR_MISMATCH,
+        `La validación de pagos de esta carrera está asignada a ${validador.name}`,
+        HttpStatus.FORBIDDEN,
+      );
+    }
+  }
 
   /**
    * Solo para lo que valida una persona: con tarjeta el corredor ve el
@@ -664,6 +737,10 @@ export class PaymentsService {
   private async resolverPendiente(pago: Payment): Promise<Payment> {
     if (pago.status !== PaymentStatus.pending) return pago;
 
+    // La pasarela es la verdad: el banco acepta el QR mas alla de nuestro
+    // `expiresAt`, asi que no se caduca nada sin preguntarle.
+    if (pago.provider === PaymentProviderName.pasarela) return this.resolverEnPasarela(pago);
+
     const vencido = pago.expiresAt !== null && pago.expiresAt.getTime() <= Date.now();
 
     if (vencido) return this.caducar(pago);
@@ -760,6 +837,8 @@ export class PaymentsService {
     // comprobante que subio el corredor. Una tarjeta rechazada NO se arregla
     // declarandola pagada, y por eso la lista es cerrada.
     const CONFIRMABLES: PaymentMethod[] = [PaymentMethod.bank_transfer, PaymentMethod.qr_manual];
+
+    await this.exigirValidador(pago.id, adminUserId);
 
     if (!CONFIRMABLES.includes(pago.method)) {
       throw new AppException(
@@ -887,7 +966,8 @@ export class PaymentsService {
     );
 
     try {
-      if (pago.externalId) await this.provider.refund(pago.externalId);
+      // Solo el proveedor de tarjeta sabe devolver; QR manual y pasarela se devuelven a mano.
+      if (pago.externalId && pago.provider === this.provider.name) await this.provider.refund(pago.externalId);
 
       await this.prisma.payment.update({
         where: { id: pago.id },
@@ -930,8 +1010,21 @@ export class PaymentsService {
         paymentQrInstructions: true,
         paymentQrPayload: true,
         logoQrUrl: true,
+        paymentValidatorId: true,
       },
     });
+
+    if (maraton.paymentValidatorId === USUARIO_API) {
+      const config = await this.prisma.platformConfig.findUnique({ where: { id: 1 } });
+      if (config?.paymentApiEnabled) {
+        return this.abrirPorPasarela(
+          registrationId,
+          cotizacion,
+          idempotencyKey,
+          this.storage.publicUrl(maraton.logoQrUrl),
+        );
+      }
+    }
 
     // El texto es lo que habilita el metodo: la app dibuja el codigo con el.
     // La imagen viaja tambien, pero solo como respaldo de las maratones que
@@ -968,6 +1061,145 @@ export class PaymentsService {
       payment: this.toDto(pago),
       registration: await this.registrations.detalleDe(registrationId),
     };
+  }
+
+  /**
+   * Abre el cobro en la API de pagos: ella genera el QR y avisa cuando se pago.
+   *
+   * Se guarda como `qr_manual` con `provider: pasarela` para que la app y la
+   * web pinten el QR igual que siempre (`methodDetails.manualQr`); `auto: true`
+   * les dice que no pidan comprobante. Se cobra `final_amount`, no el monto
+   * base: esos centavos son los que le permiten a la API atribuir el pago.
+   */
+  private async abrirPorPasarela(
+    registrationId: string,
+    cotizacion: { totalCents: number; currency: string },
+    idempotencyKey: string,
+    logoUrl: string | null,
+  ) {
+    const cobro = await this.pasarela.crear(idempotencyKey, cotizacion.totalCents, cotizacion.currency);
+    if (!cobro.qr?.payload) {
+      throw new AppException(
+        ErrorCode.PASARELA_UNAVAILABLE,
+        'La API de pagos no devolvio el QR. Intenta de nuevo.',
+        HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+
+    const pago = await this.prisma.payment.create({
+      data: {
+        registrationId,
+        provider: PaymentProviderName.pasarela,
+        method: PaymentMethod.qr_manual,
+        status: PaymentStatus.pending,
+        amountCents: aCentavos(cobro.qr.final_amount),
+        currency: cobro.qr.currency || cotizacion.currency,
+        idempotencyKey,
+        externalId: cobro.intent_id,
+        expiresAt: new Date(cobro.qr.expires_at),
+        methodDetails: {
+          manualQr: {
+            payload: cobro.qr.payload,
+            imageUrl: null,
+            logoUrl,
+            instructions:
+              cobro.qr.expiry_notice ??
+              `Paga exactamente ${cobro.qr.final_amount} ${cobro.qr.currency}. Se confirma solo.`,
+            reference: cobro.qr.reference,
+            auto: true,
+          },
+          pasarela: {
+            intentId: cobro.intent_id,
+            baseAmount: cobro.qr.base_amount,
+            finalAmount: cobro.qr.final_amount,
+          },
+        },
+      },
+    });
+
+    this.logger.log(`Cobro ${pago.id} abierto en la pasarela (${cobro.intent_id})`);
+
+    return {
+      payment: this.toDto(pago),
+      registration: await this.registrations.detalleDe(registrationId),
+    };
+  }
+
+  /** Pregunta a la pasarela y aplica lo que diga. Si no responde, el cobro sigue abierto. */
+  private async resolverEnPasarela(pago: Payment): Promise<Payment> {
+    let cobro: CobroPasarela;
+    try {
+      cobro = await this.pasarela.consultar(pago.externalId ?? '');
+    } catch {
+      return pago;
+    }
+
+    switch (cobro.status) {
+      case 'PAID':
+        return this.acreditarPorApi(pago, cobro);
+      case 'EXPIRED':
+      case 'CANCELLED':
+        await this.prisma.payment.updateMany({
+          where: { id: pago.id, status: PaymentStatus.pending },
+          data: { status: PaymentStatus.failed, failureReason: `pasarela_${cobro.status.toLowerCase()}` },
+        });
+        return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+      case 'DISPUTED':
+        // Pago tardio: no se entrega (regla 5 de la API). Lo resuelve el operador.
+        if (pago.failureReason === 'pasarela_disputed') return pago;
+        this.logger.warn(`Cobro ${pago.id}: la pasarela lo marco DISPUTED (pago tardio)`);
+        return this.prisma.payment.update({
+          where: { id: pago.id },
+          data: { failureReason: 'pasarela_disputed' },
+        });
+      default:
+        return pago;
+    }
+  }
+
+  /**
+   * La API confirmo el pago. Lo firma la cuenta `api-pasarela` —no una
+   * persona— en `confirmedById` y en la auditoria.
+   */
+  private async acreditarPorApi(pago: Payment, cobro: CobroPasarela): Promise<Payment> {
+    const { count } = await this.prisma.payment.updateMany({
+      where: { id: pago.id, status: PaymentStatus.pending },
+      data: { status: PaymentStatus.paid, paidAt: new Date(), failureReason: null, confirmedById: USUARIO_API },
+    });
+    const acreditado = await this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+    if (count !== 1) return acreditado; // otro sondeo llego primero
+
+    await this.prisma.auditLog
+      .create({
+        data: {
+          actorId: USUARIO_API,
+          actorRole: 'api',
+          method: 'POST',
+          route: '/pasarela/payment-intents/:id/paid',
+          targetId: pago.id,
+          status: 200,
+          detail: {
+            accion: 'Pago validado por la API de pagos',
+            intentId: cobro.intent_id,
+            estadoPasarela: cobro.status,
+            monto: cobro.qr?.final_amount ?? null,
+            referencia: cobro.qr?.reference ?? null,
+            registrationId: pago.registrationId,
+          },
+        },
+      })
+      .catch((e: Error) => this.logger.error(`No se pudo auditar el cobro ${pago.id}: ${e.message}`));
+
+    try {
+      await this.registrations.confirmarPago(pago.registrationId);
+    } catch (error) {
+      await this.compensar(acreditado, error);
+      return this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
+    }
+    await this.asegurarRecibo(pago.id);
+    await this.avisarPagoValidado(pago.id, pago.registrationId);
+    this.logger.log(`Cobro ${pago.id} validado por la API de pagos`);
+    return acreditado;
   }
 
   /** El pago con su ultimo comprobante, si el metodo lo lleva. */

@@ -27,7 +27,7 @@ import {
   RegistrationStatus,
   ServiceFeeScope,
 } from '../../../generated/prisma/enums';
-import { MODULOS, UserRole } from '../auth/permisos';
+import { MODULOS, USUARIO_API, UserRole } from '../auth/permisos';
 import { PermisosService } from '../auth/permisos.service';
 
 const igualesSinOrden = (a: readonly string[], b: readonly string[]) =>
@@ -161,7 +161,7 @@ const INCLUDE_TICKET = {
       bibNumber: true,
       status: true,
       personalData: true,
-      marathon: { select: { id: true, name: true } },
+      marathon: { select: { id: true, name: true, paymentValidator: { select: { id: true, name: true } } } },
       user: { select: { id: true, name: true, email: true, ci: true } },
     },
   },
@@ -1143,10 +1143,19 @@ export class AdminService {
     const comprobante = p.proofs[0];
     const revisor = p.confirmedBy ?? comprobante?.reviewedBy ?? null;
 
+    // Misma regla que `PaymentsService.exigirValidador`: la web solo la usa para
+    // esconder botones; quien decide es el backend.
+    const porApi = p.provider === 'pasarela';
+    const asignado = p.registration.marathon.paymentValidator;
+    const validador = porApi ? null : asignado && asignado.id !== USUARIO_API ? asignado : null;
+
     return {
       id: p.id,
       method: p.method,
       status: p.status,
+      byApi: porApi,
+      validatorId: validador?.id ?? null,
+      validator: porApi ? 'API de pagos' : (validador?.name ?? null),
       amountCents: p.amountCents,
       currency: p.currency,
       createdAt: p.createdAt.toISOString(),

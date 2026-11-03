@@ -118,6 +118,9 @@ enum PaymentProviderName {
   mock
   /// TEMPORAL — no hay proveedor detras: confirma una persona.
   manual
+  /// API de cobros QR externa (`Documentacion-api.md`): genera el QR y avisa
+  /// cuando se pago. Lo confirma la cuenta `api-pasarela`, no una persona.
+  pasarela
 }
 
 enum PaymentMethod {
@@ -272,6 +275,7 @@ model User {
   paymentsRefunded    Payment[]            @relation("PaymentRefundedBy")
   notifications       Notification[]
   auditLogs           AuditLog[]
+  marathonsValidated  Marathon[]           @relation("MarathonPaymentValidator")
 
   @@index([role])
   @@map("users")
@@ -577,6 +581,12 @@ model Marathon {
   /// cualquier tamano. Es lo que habilita `qr_manual`; `paymentQrUrl` queda
   /// solo como respaldo para el QR que ya estaba subido como imagen.
   paymentQrPayload      String?
+  /// Quien valida los cobros de esta carrera. La cuenta `api-pasarela` = la
+  /// API externa genera el QR y confirma sola (si esta encendida en
+  /// `platform_config`); un organizador = QR por defecto y solo el lo valida.
+  /// Null = cualquiera con `cobros.validar`. Lo asigna el admin de plataforma.
+  paymentValidatorId    String?
+  paymentValidator      User?   @relation("MarathonPaymentValidator", fields: [paymentValidatorId], references: [id], onDelete: SetNull)
 
   /// Cuando el admin puso la maraton "en preparacion". Null = todavia no.
   ///
@@ -663,6 +673,17 @@ model MarathonExtra {
 }
 
 /// Contadores sueltos del sitio. Hoy solo `inicio`: visitas a la pagina web.
+/// Interruptores de la plataforma. Una sola fila (`id = 1`, CHECK en la BD).
+model PlatformConfig {
+  id                Int      @id @default(1)
+  /// Encendida = las carreras asignadas a la cuenta `api-pasarela` cobran por
+  /// la API externa. Apagada = todas vuelven al QR manual.
+  paymentApiEnabled Boolean  @default(false)
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@map("platform_config")
+}
+
 model SiteCounter {
   key   String @id
   value Int    @default(0)

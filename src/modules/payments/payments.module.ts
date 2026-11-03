@@ -13,6 +13,7 @@ import { ReceiptService } from './receipt/receipt.service';
 import { PaymentProofController } from './manual-qr/payment-proof.controller';
 import { PaymentProofAdminController } from './manual-qr/payment-proof-admin.controller';
 import { PaymentProofService } from './manual-qr/payment-proof.service';
+import { PasarelaClient } from './pasarela/pasarela.client';
 
 /**
  * Pagos.
@@ -35,8 +36,9 @@ import { PaymentProofService } from './manual-qr/payment-proof.service';
     ReceiptService,
     ReceiptRecoveryService,
     PaymentProofService,
+    PasarelaClient,
     { provide: PAYMENT_PROVIDER, useClass: MockPaymentProvider },
   ],
-  exports: [PaymentsService, PaymentProofService],
+  exports: [PaymentsService, PaymentProofService, PasarelaClient],
 })
 export class PaymentsModule {}

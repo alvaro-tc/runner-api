@@ -142,6 +142,14 @@ export const ErrorCode = {
   /** La firma HMAC del webhook falta, no cuadra o llego fuera de la ventana de
    *  tolerancia. Deliberadamente indistinguibles entre si. */
   INVALID_WEBHOOK_SIGNATURE: 'INVALID_WEBHOOK_SIGNATURE',
+
+  // --- API de pagos (pasarela) y validador de cada carrera ------------------
+  /** La pasarela no pudo generar el QR (sin capacidad, caida o mal configurada).
+   *  `details[0].retryAfter` dice cuantos segundos esperar. */
+  PASARELA_UNAVAILABLE: 'PASARELA_UNAVAILABLE',
+  /** La validacion de los cobros de esa carrera esta asignada a otra cuenta
+   *  (otro organizador o la API): este usuario solo puede mirarlos. */
+  PAYMENT_VALIDATOR_MISMATCH: 'PAYMENT_VALIDATOR_MISMATCH',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

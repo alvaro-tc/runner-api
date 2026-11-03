@@ -9,6 +9,7 @@ import { StorageService } from '../../storage/storage.service';
 import {
   PaymentMethod,
   PaymentProofStatus,
+  PaymentProviderName,
   PaymentStatus,
 } from '../../../../generated/prisma/enums';
 import type { PaymentProof } from '../../../../generated/prisma/client';
@@ -103,6 +104,16 @@ export class PaymentProofService {
         'Solo los cobros por QR admiten comprobante',
         HttpStatus.BAD_REQUEST,
         [{ method: pago.method }],
+      );
+    }
+
+    // El QR de la pasarela se confirma solo: un comprobante quedaria en una
+    // cola que nadie puede aprobar.
+    if (pago.provider === PaymentProviderName.pasarela) {
+      throw new AppException(
+        ErrorCode.PROOF_NOT_ALLOWED,
+        'Este pago se confirma automaticamente: no hace falta subir comprobante',
+        HttpStatus.BAD_REQUEST,
       );
     }
 
@@ -203,6 +214,7 @@ export class PaymentProofService {
    */
   async aprobar(proofId: string, adminUserId: string, nota?: string) {
     const comprobante = await this.buscar(proofId);
+    await this.payments.exigirValidador(comprobante.paymentId, adminUserId);
 
     const { count } = await this.prisma.paymentProof.updateMany({
       where: { id: proofId, status: PaymentProofStatus.in_review },
@@ -253,6 +265,7 @@ export class PaymentProofService {
    */
   async rechazar(proofId: string, adminUserId: string, motivo: string) {
     const comprobante = await this.buscar(proofId);
+    await this.payments.exigirValidador(comprobante.paymentId, adminUserId);
 
     const { count } = await this.prisma.paymentProof.updateMany({
       where: { id: proofId, status: PaymentProofStatus.in_review },

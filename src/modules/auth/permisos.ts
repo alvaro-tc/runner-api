@@ -63,6 +63,14 @@ export const MODULOS = [
     permisos: [{ key: 'auditoria.ver', name: 'Ver registro', description: 'Quién hizo qué, cuándo y con qué resultado.' }],
   },
   {
+    key: 'plataforma',
+    name: 'Plataforma',
+    description: 'La API de pagos externa y quién valida los cobros de cada carrera.',
+    permisos: [
+      { key: 'plataforma.gestionar', name: 'Gestionar plataforma', description: 'Encender o apagar la API de pagos y asignar el validador de cada carrera.' },
+    ],
+  },
+  {
     key: 'config',
     name: 'Configuración',
     description: 'Cargo por servicio, recorridos y la app Android.',
@@ -75,7 +83,10 @@ export type Permiso = (typeof MODULOS)[number]['permisos'][number]['key'];
 export const PERMISOS: readonly string[] = MODULOS.flatMap((m) => m.permisos.map((p) => p.key));
 
 /** Claves de los roles de serie. El resto de roles se crean desde el panel. */
-export const UserRole = { runner: 'runner', organizer: 'organizer', osi: 'osi', admin: 'admin' } as const;
+export const UserRole = { runner: 'runner', organizer: 'organizer', osi: 'osi', admin: 'admin', plataforma: 'plataforma', api: 'api' } as const;
+
+/** La cuenta de sistema que firma lo que valida la API de pagos (ver migracion `pasarela_pagos`). */
+export const USUARIO_API = 'api-pasarela';
 export type UserRole = string;
 
 /**

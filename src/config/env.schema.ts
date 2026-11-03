@@ -209,6 +209,13 @@ export const envSchema = z.object({
   /// cobro queda `failed` y el cupo se suelta: sin esto un QR sin pagar
   /// bloquearia una plaza para siempre.
   PAYMENT_PROOF_TTL_HOURS: z.coerce.number().int().positive().default(48),
+  /// API de cobros QR externa (`Documentacion-api.md`). Sin URL y clave, la
+  /// pasarela no se usa aunque el admin de plataforma la encienda. La clave es
+  /// un secreto: con ella se cobra en nombre de la empresa.
+  PASARELA_API_URL: z.string().url().optional(),
+  PASARELA_API_KEY: z.string().min(1).optional(),
+  /// Vida del QR de la pasarela, en segundos (la API acepta 120-3600).
+  PASARELA_QR_TTL_SECONDS: z.coerce.number().int().min(120).max(3600).default(900),
   /// Deja abierta la inscripcion publica desde la web. Apagarlo cierra
   /// `/public/*` de golpe sin desplegar codigo.
   PUBLIC_REGISTRATION_ENABLED: z
