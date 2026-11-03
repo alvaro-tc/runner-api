@@ -14,6 +14,7 @@ import { calcularServiceFee } from '../pricing/service-fee';
 import { ServiceFeeConfigService } from '../pricing/service-fee.service';
 import { resolverEstado } from '../marathons/registration-status';
 import { estadoEnVivo } from '../marathons/live-status';
+import { perfilInscritas, serieDiaria } from './stats';
 import type { EstadoDeMaraton } from '../realtime/live-state';
 import { PaymentsService } from '../payments/payments.service';
 import { RacesService } from '../races/races.service';
@@ -1490,14 +1491,15 @@ export class AdminService {
   async metricasMaraton(marathonId: string) {
     const maraton = await this.prisma.marathon.findUnique({
       where: { id: marathonId },
-      select: { capacity: true, views: true },
+      select: { capacity: true, views: true, startsAt: true },
     });
     if (!maraton) {
       throw new AppException(ErrorCode.NOT_FOUND, 'La maraton no existe', HttpStatus.NOT_FOUND);
     }
 
     const deLaMaraton = { registration: { marathonId } };
-    const [confirmed, pagados, paymentsPending, proofsInReview, inicio] = await Promise.all([
+    // ponytail: trae las filas pagadas/confirmadas y agrega en memoria; con decenas de miles pasar a GROUP BY en SQL.
+    const [confirmed, pagados, paymentsPending, proofsInReview, inicio, porEstado, filasPagadas, inscritas] = await Promise.all([
       this.prisma.registration.count({ where: { marathonId, status: 'confirmed' } }),
       this.prisma.payment.aggregate({
         where: { ...deLaMaraton, status: 'paid' },
@@ -1507,6 +1509,19 @@ export class AdminService {
       this.prisma.payment.count({ where: { ...deLaMaraton, status: 'pending' } }),
       this.prisma.paymentProof.count({ where: { status: 'in_review', payment: deLaMaraton } }),
       this.prisma.siteCounter.findUnique({ where: { key: 'inicio' } }),
+      this.prisma.registration.groupBy({ by: ['status'], where: { marathonId, deletedAt: null }, _count: { _all: true } }),
+      this.prisma.payment.findMany({
+        where: { ...deLaMaraton, status: 'paid' },
+        select: { paidAt: true, amountCents: true },
+      }),
+      this.prisma.registration.findMany({
+        where: { marathonId, status: 'confirmed' },
+        select: {
+          personalData: true,
+          category: { select: { name: true } },
+          user: { select: { profile: { select: { birthDate: true } } } },
+        },
+      }),
     ]);
 
     return {
@@ -1518,6 +1533,16 @@ export class AdminService {
       proofsInReview,
       marathonViews: maraton.views,
       pageViews: inicio?.value ?? 0,
+      registrationsByStatus: Object.fromEntries(porEstado.map((g) => [g.status, g._count._all])),
+      daily: serieDiaria(filasPagadas, new Date()),
+      ...perfilInscritas(
+        inscritas.map((r) => ({
+          personalData: r.personalData,
+          category: r.category?.name ?? null,
+          birthDate: r.user.profile?.birthDate ?? null,
+        })),
+        maraton.startsAt,
+      ),
     };
   }
 

@@ -264,7 +264,9 @@ export class AdminController {
     summary: 'Metricas de una maratón para el resumen del admin',
     description:
       'Inscritas confirmadas, cupos, recaudado (cobros `paid`), cobros validados y por validar, ' +
-      'comprobantes en revisión, vistas del detalle y visitas a la página de inicio.',
+      'comprobantes en revisión, vistas del detalle y visitas a la página de inicio. Además: ' +
+      '`daily` (cobros validados por día, hora de La Paz, máx. 60 días), `registrationsByStatus` ' +
+      '(embudo), y de las confirmadas `knowsCam`, `acceptsDonorCall`, `ages` y `categories`.',
   })
   @ApiResponse({ status: 404, type: ErrorResponseDto, description: 'NOT_FOUND' })
   metricas(@Param('id') id: string) {
