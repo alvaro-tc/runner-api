@@ -147,6 +147,11 @@ export class MarathonSummaryDto {
   })
   paymentQrPayload!: string | null;
 
+  @ApiProperty({
+    description: 'true = carrera asignada a la API de pagos y API encendida: el QR llega en el checkout, no usar `paymentQrPayload`.',
+  })
+  paymentApi!: boolean;
+
   @ApiProperty({ enum: MarathonRegistrationStatus, description: 'Derivado al leer' })
   registrationStatus!: MarathonRegistrationStatus;
 

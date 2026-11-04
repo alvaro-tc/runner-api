@@ -8,6 +8,7 @@ import type { Prisma } from '../../../generated/prisma/client';
 import { cuposDisponibles, resolverEstado } from './registration-status';
 import { LIMITE_POR_DEFECTO, type ListMarathonsQueryDto } from './dto/marathon.dto';
 import { StorageService } from '../storage/storage.service';
+import { USUARIO_API } from '../auth/permisos';
 
 /**
  * Cuantas filas se piden por vuelta cuando hay filtro de estado, y cuantas
@@ -35,6 +36,7 @@ const CAMPOS_RESUMEN = {
   paymentQrUrl: true,
   paymentQrInstructions: true,
   paymentQrPayload: true,
+  paymentValidatorId: true,
   registrationStatus: true,
   capacity: true,
   slotsTaken: true,
@@ -115,8 +117,9 @@ export class MarathonsService {
     // donde seguir, o creeria que el catalogo se acabo.
     const nextCursor = pagina.nextCursor ?? (quedanFilas && cursor ? encodeCursor(cursor) : null);
 
+    const api = await this.apiDePagos();
     return new Paginated(
-      pagina.items.map((m) => this.toResumen(m, ahora)),
+      pagina.items.map((m) => this.toResumen(m, ahora, api)),
       nextCursor,
     );
   }
@@ -132,7 +135,8 @@ export class MarathonsService {
       select: CAMPOS_RESUMEN,
     });
 
-    return maratones.map((m) => this.toResumen(m, ahora));
+    const api = await this.apiDePagos();
+    return maratones.map((m) => this.toResumen(m, ahora, api));
   }
 
   /**
@@ -150,7 +154,7 @@ export class MarathonsService {
       select: CAMPOS_RESUMEN,
     });
 
-    return maraton ? this.toResumen(maraton, ahora) : null;
+    return maraton ? this.toResumen(maraton, ahora, await this.apiDePagos()) : null;
   }
 
   /** Una visita a la pagina de inicio de la web. */
@@ -181,7 +185,7 @@ export class MarathonsService {
       .catch(() => undefined);
 
     return {
-      ...this.toResumen(maraton, ahora),
+      ...this.toResumen(maraton, ahora, await this.apiDePagos()),
       description: maraton.description,
       lat: maraton.lat,
       lng: maraton.lng,
@@ -273,7 +277,13 @@ export class MarathonsService {
     return where;
   }
 
-  private toResumen(maraton: FilaResumen, ahora: Date) {
+  /** Interruptor global; ademas la carrera tiene que estar asignada a la API. */
+  private async apiDePagos(): Promise<boolean> {
+    const c = await this.prisma.platformConfig.findUnique({ where: { id: 1 }, select: { paymentApiEnabled: true } });
+    return c?.paymentApiEnabled ?? false;
+  }
+
+  private toResumen(maraton: FilaResumen, ahora: Date, paymentApi = false) {
     return {
       id: maraton.id,
       slug: maraton.slug,
@@ -302,6 +312,9 @@ export class MarathonsService {
       // El QR va como texto: lo pinta la app. Es esto —y no la imagen— lo que
       // decide si la carrera admite `qr_manual`.
       paymentQrPayload: maraton.paymentQrPayload,
+      // true = esta carrera esta asignada a la API y la API esta encendida: el QR
+      // sale de la API al abrir el cobro; ignorar el de arriba.
+      paymentApi: paymentApi && maraton.paymentValidatorId === USUARIO_API,
       // El campo homonimo de la BD es solo la intencion del admin; lo que sale
       // por la API es el estado resuelto.
       registrationStatus: resolverEstado(maraton, ahora),

@@ -16,6 +16,7 @@ import type { PaymentProof } from '../../../../generated/prisma/client';
 import { PaymentsService } from '../payments.service';
 import { LiveService } from '../../realtime/live.service';
 import { NotificationsService } from '../../notifications/notifications.service';
+import { PasarelaClient } from '../pasarela/pasarela.client';
 
 /**
  * Formatos que sabemos decodificar. Todo sale convertido a WebP igual.
@@ -74,6 +75,7 @@ export class PaymentProofService {
     // aviso hay que darlo desde aqui: nadie mas lo va a dar.
     private readonly live: LiveService,
     private readonly notifications: NotificationsService,
+    private readonly pasarela: PasarelaClient,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -107,15 +109,10 @@ export class PaymentProofService {
       );
     }
 
-    // El QR de la pasarela se confirma solo: un comprobante quedaria en una
-    // cola que nadie puede aprobar.
-    if (pago.provider === PaymentProviderName.pasarela) {
-      throw new AppException(
-        ErrorCode.PROOF_NOT_ALLOWED,
-        'Este pago se confirma automaticamente: no hace falta subir comprobante',
-        HttpStatus.BAD_REQUEST,
-      );
-    }
+    // Cobro de la API: el comprobante se guarda aqui (copia propia) y se
+    // reenvia a la API, que lo pide para confirmar. Lo aprueba la API al
+    // acreditar, no un organizador: por eso no entra en la cola de revision.
+    const esPasarela = pago.provider === PaymentProviderName.pasarela;
 
     if (pago.status !== PaymentStatus.pending) {
       throw new AppException(
@@ -152,7 +149,20 @@ export class PaymentProofService {
 
     this.logger.log(`Comprobante ${comprobante.id} subido para el cobro ${paymentId}`);
 
-    await this.avisarAlEquipo(comprobante.id, paymentId);
+    if (esPasarela) {
+      const uploadUrl = (pago.methodDetails as { pasarela?: { receiptUploadUrl?: string | null } } | null)
+        ?.pasarela?.receiptUploadUrl;
+      // Sin upload_url la API no tiene activa la subida: queda solo la copia local.
+      // Si el reenvio falla, la API confirma igual al vencer `wait_until` (§7).
+      if (uploadUrl) {
+        await this.pasarela
+          .subirComprobante(uploadUrl, webp)
+          .then(() => this.logger.log(`Comprobante ${comprobante.id} reenviado a la API de pagos`))
+          .catch((e: Error) => this.logger.error(`No se pudo reenviar el comprobante ${comprobante.id}: ${e.message}`));
+      }
+    } else {
+      await this.avisarAlEquipo(comprobante.id, paymentId);
+    }
 
     return this.toDto(comprobante);
   }
@@ -164,7 +174,8 @@ export class PaymentProofService {
   /** Comprobantes esperando a que alguien los mire, del mas viejo al mas nuevo. */
   async pendientes(limite = 100) {
     const filas = await this.prisma.paymentProof.findMany({
-      where: { status: PaymentProofStatus.in_review },
+      // Los de la API no los revisa nadie: los aprueba la API al acreditar.
+      where: { status: PaymentProofStatus.in_review, payment: { provider: { not: PaymentProviderName.pasarela } } },
       // Del mas viejo primero: es una cola de trabajo, no un muro de novedades.
       orderBy: { createdAt: 'asc' },
       take: limite,

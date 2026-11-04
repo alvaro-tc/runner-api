@@ -1587,7 +1587,7 @@ export class AdminService {
         _sum: { amountCents: true },
       }),
       this.prisma.payment.count({ where: { ...deLaMaraton, status: 'pending' } }),
-      this.prisma.paymentProof.count({ where: { status: 'in_review', payment: deLaMaraton } }),
+      this.prisma.paymentProof.count({ where: { status: 'in_review', payment: { ...deLaMaraton, provider: { not: 'pasarela' } } } }),
       this.prisma.siteCounter.findUnique({ where: { key: 'inicio' } }),
       this.prisma.registration.groupBy({ by: ['status'], where: { marathonId, deletedAt: null }, _count: { _all: true } }),
       this.prisma.payment.findMany({

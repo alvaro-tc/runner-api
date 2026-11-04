@@ -1112,6 +1112,9 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
             intentId: cobro.intent_id,
             baseAmount: cobro.qr.base_amount,
             finalAmount: cobro.qr.final_amount,
+            // Token de un solo uso para reenviar el comprobante del corredor.
+            // Solo lo lee el servidor: `toDto` lo quita.
+            receiptUploadUrl: cobro.receipt?.upload_url ?? null,
           },
         },
       },
@@ -1169,6 +1172,11 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     const acreditado = await this.prisma.payment.findUniqueOrThrow({ where: { id: pago.id } });
     if (count !== 1) return acreditado; // otro sondeo llego primero
 
+    await this.prisma.paymentProof.updateMany({
+      where: { paymentId: pago.id, status: 'in_review' },
+      data: { status: 'approved', reviewedById: USUARIO_API, reviewedAt: new Date(), note: 'Validado por la API de pagos' },
+    });
+
     await this.prisma.auditLog
       .create({
         data: {
@@ -1217,7 +1225,7 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       status: pago.status,
       amountCents: pago.amountCents,
       currency: pago.currency,
-      methodDetails: (pago.methodDetails ?? {}) as Record<string, unknown>,
+      methodDetails: sinSecretos(pago.methodDetails),
       failureReason: pago.failureReason,
       expiresAt: pago.expiresAt?.toISOString() ?? null,
       paidAt: pago.paidAt?.toISOString() ?? null,
@@ -1225,6 +1233,17 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
       createdAt: pago.createdAt.toISOString(),
     };
   }
+}
+
+/** `methodDetails` sin el token de subida de la pasarela: no sale del servidor. */
+function sinSecretos(detalles: unknown): Record<string, unknown> {
+  const d = { ...((detalles ?? {}) as Record<string, unknown>) };
+  if (d.pasarela && typeof d.pasarela === 'object') {
+    const resto = { ...(d.pasarela as Record<string, unknown>) };
+    delete resto.receiptUploadUrl;
+    d.pasarela = resto;
+  }
+  return d;
 }
 
 /**

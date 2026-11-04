@@ -25,6 +25,8 @@ export interface CobroPasarela {
     expires_at: string;
     expiry_notice?: string;
   };
+  /** Solo si el comercio tiene activa la subida de comprobantes (§7). */
+  receipt?: { required: boolean; received: boolean; upload_url: string };
 }
 
 /** `"150.01"` -> 15001. Por texto, nunca por float: es dinero. */
@@ -69,6 +71,21 @@ export class PasarelaClient {
 
   consultar(intentId: string): Promise<CobroPasarela> {
     return this.llamar('GET', `/v1/payment-intents/${encodeURIComponent(intentId)}`);
+  }
+
+  /**
+   * Reenvia el comprobante del corredor. `PUT` con el archivo crudo y token de
+   * un solo uso en la URL: no lleva api key (§7).
+   */
+  async subirComprobante(uploadUrl: string, archivo: Buffer): Promise<void> {
+    const base = this.config.get('PASARELA_API_URL')?.replace(/\/$/, '');
+    if (!base) return;
+    const res = await fetch(base + uploadUrl, {
+      method: 'PUT',
+      body: new Uint8Array(archivo),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) throw new Error(`Pasarela PUT receipt -> ${res.status} ${await res.text().catch(() => '')}`);
   }
 
   private async llamar<T>(
