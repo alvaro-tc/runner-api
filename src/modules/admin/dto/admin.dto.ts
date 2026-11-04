@@ -187,6 +187,16 @@ export class RaceResultRowDto {
   overallRank?: number | null;
 }
 
+export class SetRankingDto {
+  @ApiProperty({
+    type: [String],
+    description: 'Inscripciones en orden de llegada: la primera queda 1.a. Vacío = volver al orden automático.',
+  })
+  @IsArray()
+  @IsString({ each: true })
+  registrationIds!: string[];
+}
+
 export class ImportResultsDto {
   @ApiProperty({ type: [RaceResultRowDto] })
   @IsArray()

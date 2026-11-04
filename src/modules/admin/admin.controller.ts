@@ -52,6 +52,7 @@ import {
   FeePreviewDto,
   FeePreviewQueryDto,
   ImportResultsDto,
+  SetRankingDto,
   ImportResultsResponseDto,
   ListUsersQueryDto,
   PrepareMarathonDto,
@@ -833,6 +834,28 @@ export class AdminController {
   @ApiResponse({ status: 200, type: ImportResultsResponseDto })
   importarResultados(@Param('id') id: string, @Body() dto: ImportResultsDto) {
     return this.admin.importarResultados(id, dto);
+  }
+
+  @Get('marathons/:id/ranking')
+  @Permiso('carreras.ver')
+  @ApiOperation({
+    summary: 'Clasificación completa, en orden',
+    description: '`finishDetected` = el GPS vio cruzar la meta. `manual` = puesto fijado por el organizador.',
+  })
+  clasificacion(@Param('id') id: string) {
+    return this.admin.clasificacion(id);
+  }
+
+  @Put('marathons/:id/ranking')
+  @Permiso('carreras.editar')
+  @ApiOperation({
+    summary: 'Corregir el orden de llegada',
+    description:
+      'Recibe las inscripciones en orden; la primera queda 1.ª. Quien no aparezca vuelve al orden ' +
+      'automático, así que una lista vacía deshace todas las correcciones. Devuelve la clasificación.',
+  })
+  fijarClasificacion(@Param('id') id: string, @Body() dto: SetRankingDto) {
+    return this.admin.fijarClasificacion(id, dto.registrationIds);
   }
 
   @Post('marathons/:id/recalculate-ranks')

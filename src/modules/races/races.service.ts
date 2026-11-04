@@ -11,6 +11,11 @@ import { aLineString, simplificarHasta } from './route';
 import { ShareCardService } from './share-card.service';
 import { estadoEnVivo } from '../marathons/live-status';
 import { RaceStatusFilter, type ListMyRacesQueryDto } from './dto/race.dto';
+import { calcularPuestos } from './ranking';
+import { prepararRecorrido, validarRecorrido } from '../realtime/course';
+
+/** Fraccion de la distancia oficial que hay que cubrir para contar como llegada. */
+const FRACCION_LLEGADA = 0.9;
 
 /**
  * Tope de posiciones que se leen para dibujar un recorrido.
@@ -148,7 +153,20 @@ export class RacesService {
       orderBy: { marathon: { startsAt: proximas ? 'asc' : 'desc' } },
     });
 
-    return filas.map((fila) => this.toResumen(fila));
+    // Un solo conteo agrupado para todas: la tarjeta muestra "#12 de 340".
+    const conResultado = [...new Set(filas.filter((f) => f.raceResult).map((f) => f.marathonId))];
+    const conteos = conResultado.length
+      ? await this.prisma.registration.groupBy({
+          by: ['marathonId'],
+          where: { marathonId: { in: conResultado }, deletedAt: null, raceResult: { isNot: null } },
+          _count: { _all: true },
+        })
+      : [];
+    const finishers = new Map(conteos.map((c) => [c.marathonId, c._count._all]));
+
+    return filas.map((fila) =>
+      this.toResumen(fila, fila.raceResult ? (finishers.get(fila.marathonId) ?? null) : null),
+    );
   }
 
   /** Detalle completo, con recorrido simplificado y marcadores cada 5 km. */
@@ -302,11 +320,17 @@ export class RacesService {
     // se acuerda de pulsar "finalizar" —ni cuando el telefono, sin cobertura,
     // consigue subir el entrenamiento tres horas despues. Sin recorrido no hay
     // nada mejor que `endedAt`.
-    const finishedAt = puntos.at(-1)?.recordedAt ?? workout.endedAt ?? new Date();
+    // Validacion contra el trazado: si completo el recorrido y **cuando** cruzo
+    // la meta. Sin trazado cargado no hay nada contra que medir.
+    const largada = registro.marathon.liveStartedAt ?? registro.marathon.startsAt;
+    const recorrido = prepararRecorrido(registro.marathon.routeGeoJson, registro.marathon.laps);
+    const validacion = recorrido ? validarRecorrido(recorrido, puntos, largada) : null;
 
-    const desdeLargada = Math.round(
-      (finishedAt.getTime() - registro.marathon.startsAt.getTime()) / 1000,
-    );
+    const finishedAt =
+      validacion?.llegadaAt ?? puntos.at(-1)?.recordedAt ?? workout.endedAt ?? new Date();
+
+    // Contra la largada **real** (la que dio el organizador), no la programada.
+    const desdeLargada = Math.round((finishedAt.getTime() - largada.getTime()) / 1000);
     const finishTimeSeconds = desdeLargada > 0 ? desdeLargada : workout.durationSeconds;
 
     const datos = {
@@ -319,6 +343,9 @@ export class RacesService {
       elevationGainMeters: workout.elevationGainMeters,
       bestKmIndex: workout.bestKmIndex,
       finishedAt,
+      routeCompleted: validacion?.completo ?? null,
+      routeCoverage: validacion?.cobertura ?? null,
+      lapsCompleted: validacion?.vueltas ?? null,
     };
 
     await this.prisma.$transaction(async (tx) => {
@@ -340,13 +367,8 @@ export class RacesService {
   }
 
   /**
-   * Reasigna los puestos general y por categoria de una maraton.
-   *
-   * Se ordena por el tiempo oficial, con la hora de llegada como desempate. Los
-   * empates **comparten puesto** —dos corredores con el mismo tiempo son ambos
-   * terceros— y el siguiente salta al quinto: es la regla de cualquier
-   * clasificacion deportiva, y numerarlos 3 y 4 por orden de id inventaria una
-   * diferencia que no existe.
+   * Reasigna los puestos general y por categoria de una maraton. Las reglas
+   * viven en `ranking.ts`; aqui solo se lee y se escribe.
    *
    * Se recalcula la maraton entera cada vez. Con miles de resultados son unas
    * pocas decenas de milisegundos, y la alternativa —insertar en el medio y
@@ -354,72 +376,15 @@ export class RacesService {
    * corredores con el mismo puesto por un fallo a medio camino.
    */
   async recalcularPuestos(marathonId: string): Promise<void> {
-    const resultados = await this.prisma.raceResult.findMany({
-      where: { registration: { marathonId, deletedAt: null } },
-      orderBy: [{ finishTimeSeconds: 'asc' }, { finishedAt: 'asc' }],
-      select: {
-        id: true,
-        finishTimeSeconds: true,
-        overallRank: true,
-        manualOverallRank: true,
-        categoryRank: true,
-        registration: { select: { categoryId: true } },
-      },
+    const filas = await this.filasDeClasificacion(marathonId);
+    const puestos = calcularPuestos(filas);
+
+    const cambios = filas.flatMap((r) => {
+      const p = puestos.get(r.id)!;
+      return r.overallRank !== p.overallRank || r.categoryRank !== p.categoryRank
+        ? [{ id: r.id, ...p }]
+        : [];
     });
-
-    // El podio manual reserva sus posiciones; los demas compiten por tiempo en
-    // los lugares disponibles y los empates conservan el mismo puesto.
-    const puestosManuales = new Set(
-      resultados.flatMap((r) => (r.manualOverallRank === null ? [] : [r.manualOverallRank])),
-    );
-    const general = { vistos: 0, puesto: 0, ultimoTiempo: null as number | null };
-    const porCategoria = new Map<string, typeof general>();
-    const cambios: { id: string; overallRank: number; categoryRank: number | null }[] = [];
-
-    const situar = (cuenta: typeof general, tiempo: number): number => {
-      cuenta.vistos += 1;
-      if (tiempo !== cuenta.ultimoTiempo) {
-        cuenta.puesto = cuenta.vistos;
-        cuenta.ultimoTiempo = tiempo;
-      }
-      return cuenta.puesto;
-    };
-
-    for (const r of resultados) {
-      let overallRank: number;
-      if (r.manualOverallRank !== null) {
-        overallRank = r.manualOverallRank;
-      } else {
-        general.vistos += 1;
-        if (r.finishTimeSeconds !== general.ultimoTiempo) {
-          let puesto = general.vistos;
-          while (true) {
-            const reservadosAnteriores = [...puestosManuales].filter(
-              (reservado) => reservado <= puesto,
-            ).length;
-            const siguiente = general.vistos + reservadosAnteriores;
-            if (siguiente === puesto) break;
-            puesto = siguiente;
-          }
-          general.puesto = puesto;
-          general.ultimoTiempo = r.finishTimeSeconds;
-        }
-        overallRank = general.puesto;
-      }
-
-      const clave = r.registration.categoryId;
-      let categoryRank: number | null = null;
-
-      if (clave !== null) {
-        const cuenta = porCategoria.get(clave) ?? { vistos: 0, puesto: 0, ultimoTiempo: null };
-        porCategoria.set(clave, cuenta);
-        categoryRank = situar(cuenta, r.finishTimeSeconds);
-      }
-
-      if (r.overallRank !== overallRank || r.categoryRank !== categoryRank) {
-        cambios.push({ id: r.id, overallRank, categoryRank });
-      }
-    }
 
     if (cambios.length === 0) return;
 
@@ -433,6 +398,139 @@ export class RacesService {
     );
 
     this.logger.log(`Puestos recalculados en ${marathonId}: ${cambios.length} resultados`);
+  }
+
+  /**
+   * Clasificacion completa para el panel del organizador, ya ordenada.
+   *
+   * `finishDetected` le dice si el GPS vio cruzar la meta: los que no, son los
+   * primeros sospechosos cuando el orden automatico no cuadra con el arco.
+   */
+  async clasificacion(marathonId: string) {
+    const filas = await this.filasDeClasificacion(marathonId);
+
+    return filas
+      .sort((a, b) => (a.overallRank ?? Infinity) - (b.overallRank ?? Infinity))
+      .map((r) => ({
+        registrationId: r.registrationId,
+        overallRank: r.overallRank,
+        categoryRank: r.categoryRank,
+        manual: r.manualOverallRank !== null,
+        finishDetected: r.llego,
+        bibNumber: r.bibNumber,
+        runner: r.runner,
+        categoryName: r.categoryName,
+        finishTimeSeconds: r.finishTimeSeconds,
+        distanceMeters: r.distanceMeters,
+        routeCoverage: r.routeCoverage,
+        lapsCompleted: r.lapsCompleted,
+      }));
+  }
+
+  /**
+   * El organizador fija el orden de llegada.
+   *
+   * `registrationIds` es la clasificacion **en orden**: el primero queda 1.o,
+   * el segundo 2.o... Quien no aparezca vuelve al orden automatico, asi que una
+   * lista vacia deshace todas las correcciones.
+   */
+  async fijarClasificacion(marathonId: string, registrationIds: string[]) {
+    if (new Set(registrationIds).size !== registrationIds.length) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Un corredor aparece dos veces en la clasificacion',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const existentes = await this.prisma.raceResult.findMany({
+      where: { registrationId: { in: registrationIds }, registration: { marathonId, deletedAt: null } },
+      select: { registrationId: true },
+    });
+    if (existentes.length !== registrationIds.length) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'Hay corredores sin resultado en esta carrera',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.raceResult.updateMany({
+        where: { registration: { marathonId } },
+        data: { manualOverallRank: null },
+      }),
+      ...registrationIds.map((registrationId, i) =>
+        this.prisma.raceResult.update({
+          where: { registrationId },
+          data: { manualOverallRank: i + 1 },
+        }),
+      ),
+    ]);
+
+    await this.recalcularPuestos(marathonId);
+    return this.clasificacion(marathonId);
+  }
+
+  private async filasDeClasificacion(marathonId: string) {
+    const [maraton, resultados] = await Promise.all([
+      this.prisma.marathon.findUnique({ where: { id: marathonId }, select: { distanceMeters: true } }),
+      this.prisma.raceResult.findMany({
+        where: { registration: { marathonId, deletedAt: null } },
+        select: {
+          id: true,
+          registrationId: true,
+          workoutId: true,
+          finishTimeSeconds: true,
+          finishedAt: true,
+          distanceMeters: true,
+          overallRank: true,
+          manualOverallRank: true,
+          categoryRank: true,
+          routeCompleted: true,
+          routeCoverage: true,
+          lapsCompleted: true,
+          workout: { select: { trackingSession: { select: { finishDetectedAt: true } } } },
+          registration: {
+            select: {
+              categoryId: true,
+              bibNumber: true,
+              personalData: true,
+              category: { select: { name: true } },
+              user: { select: { name: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    // Sin validacion de recorrido (carrera sin trazado, resultados viejos) se
+    // cae a la deteccion en vivo o a la distancia.
+    // ponytail: 90 % de la distancia cubre el error del GPS; afinar si hay
+    // carreras con trazados muy sinuosos que el GPS recorta mas.
+    const minimo = (maraton?.distanceMeters ?? 0) * FRACCION_LLEGADA;
+
+    return resultados.map((r) => ({
+      id: r.id,
+      registrationId: r.registrationId,
+      finishTimeSeconds: r.finishTimeSeconds,
+      finishedAt: r.finishedAt,
+      distanceMeters: r.distanceMeters,
+      overallRank: r.overallRank,
+      categoryRank: r.categoryRank,
+      manualOverallRank: r.manualOverallRank,
+      categoryId: r.registration.categoryId,
+      categoryName: r.registration.category?.name ?? null,
+      bibNumber: r.registration.bibNumber,
+      runner: nombreDelCorredor(r.registration.personalData, r.registration.user.name),
+      // Sin entrenamiento = vino del cronometraje oficial (CSV): llego.
+      routeCoverage: r.routeCoverage,
+      lapsCompleted: r.lapsCompleted,
+      llego:
+        r.workoutId === null ||
+        (r.routeCompleted ??
+          (r.workout?.trackingSession?.finishDetectedAt != null || r.distanceMeters >= minimo)),
+    }));
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -600,11 +698,11 @@ export class RacesService {
  * Nombre para la tarjeta. `personalData` es jsonb libre: una fila vieja o
  * tocada a mano no deberia tumbar la generacion de una imagen.
  */
-function nombreDelCorredor(personalData: Prisma.JsonValue): string {
+function nombreDelCorredor(personalData: Prisma.JsonValue, porDefecto = 'Corredor'): string {
   if (personalData && typeof personalData === 'object' && !Array.isArray(personalData)) {
     const nombre = (personalData as Record<string, unknown>).fullName;
     if (typeof nombre === 'string' && nombre.trim() !== '') return nombre.trim();
   }
 
-  return 'Corredor';
+  return porDefecto;
 }

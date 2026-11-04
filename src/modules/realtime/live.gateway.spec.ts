@@ -14,6 +14,7 @@ describe('suscripcion del corredor', () => {
     prisma: { marathon: { count }, registration: { findFirst } },
     server: { to },
     permisos: { tiene: (r: string) => r === 'admin' || r === 'organizer' },
+    presentes: new Map(),
   }) as unknown as LiveGateway;
 
   function client() {

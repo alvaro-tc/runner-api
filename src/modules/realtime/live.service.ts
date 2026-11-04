@@ -13,7 +13,7 @@ import {
   type EstadoDeMaraton,
   type PuntoLive,
 } from './live-state';
-import { avanceEnCircuito, prepararRecorrido, type Recorrido } from './course';
+import { avanceEnCircuito, pistaInicial, prepararRecorrido, type Recorrido } from './course';
 import { RegistrationStatus } from '../../../generated/prisma/enums';
 
 /** Cuanto puede estar callada una sesion antes de que se tire su estado. */
@@ -181,9 +181,15 @@ export class LiveService {
     let llego = false;
 
     if (curso.recorrido) {
-      const avance = avanceEnCircuito(curso.recorrido, estado, puntos, curso.laps);
+      // Primer lote de este corredor en este proceso: la hora de largada deja
+      // reenganchar a quien ya iba por el km 10 (un reinicio del servidor, un
+      // movil que empezo a subir tarde) en vez de buscarlo junto a la salida.
+      if (estado.pista.t === null && estado.pista.progresoM === 0) {
+        estado.pista = pistaInicial(await this.largadaDe(estado.marathonId));
+      }
+      const avance = avanceEnCircuito(curso.recorrido, estado.pista, puntos);
+      estado.pista = avance.pista;
       estado.vueltas = avance.vueltas;
-      estado.progresoM = avance.progresoM;
       llego = avance.llego;
     } else {
       // Sin trazado cargado no hay ruta que comprobar: solo queda el
@@ -223,7 +229,7 @@ export class LiveService {
     });
 
     const curso: Curso = {
-      recorrido: prepararRecorrido(maraton?.routeGeoJson),
+      recorrido: prepararRecorrido(maraton?.routeGeoJson, maraton?.laps ?? 1),
       distanceMeters: maraton?.distanceMeters ?? 0,
       laps: maraton?.laps ?? 1,
     };
@@ -397,7 +403,19 @@ export class LiveService {
 
   /** Donde va cada corredor de esa maraton ahora mismo. */
   posiciones(marathonId: string) {
-    return foto(this.estados, marathonId);
+    // La ingesta (Traccar o sesion de carrera) manda sobre la presencia del
+    // socket: si los dos tienen al mismo dorsal, vale el de la ingesta.
+    const ingesta = foto(this.estados, marathonId);
+    const vistos = new Set(ingesta.map((p) => p.bib));
+    const presentes = this.gateway
+      .posicionesDePresentes(marathonId)
+      .filter((p) => !vistos.has(p.bib));
+    return [...ingesta, ...presentes];
+  }
+
+  /** Cuantos tienen la app abierta en la sala de espera. */
+  presentes(marathonId: string): number {
+    return this.gateway.contarPresentes(marathonId);
   }
 
   /** Olvida a un corredor. La llama el cierre o el descarte de la sesion. */
@@ -433,6 +451,14 @@ export class LiveService {
     this.estados.set(sessionId, estado);
 
     return estado;
+  }
+
+  private async largadaDe(marathonId: string): Promise<Date | null> {
+    const m = await this.prisma.marathon.findUnique({
+      where: { id: marathonId },
+      select: { liveStartedAt: true },
+    });
+    return m?.liveStartedAt ?? null;
   }
 
   private async dorsalDe(workoutId: string | null): Promise<string | null> {

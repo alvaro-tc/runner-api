@@ -3,6 +3,7 @@ import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
+  OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
@@ -49,6 +50,30 @@ interface SocketDeEspectador extends Socket {
   runnerRooms?: Map<string, string>;
   subscriptions?: Map<string, number>;
   subscriptionVersion?: number;
+  presence?: Presencia;
+}
+
+/**
+ * Un corredor con la app abierta en la sala de espera de una carrera en
+ * preparacion. Vive en el socket: cerrarlo es irse.
+ */
+interface Presencia {
+  marathonId: string;
+  bib: string | null;
+  ultimo: PosicionEnVivo | null;
+  ultimoEnvioMs: number;
+}
+
+/**
+ * Una posicion de presencia cada segundo como mucho. El movil manda al ritmo
+ * del GPS; esto solo evita que un cliente roto inunde la sala.
+ */
+const PRESENCIA_MIN_MS = 1_000;
+
+function coordenada(valor: unknown, limite: number): number | null {
+  return typeof valor === 'number' && Number.isFinite(valor) && Math.abs(valor) <= limite
+    ? Math.round(valor * 1e5) / 1e5
+    : null;
 }
 
 /**
@@ -66,11 +91,19 @@ interface SocketDeEspectador extends Socket {
  * acuerda de cerrar despues.
  */
 @WebSocketGateway({ namespace: NAMESPACE_LIVE })
-export class LiveGateway implements OnGatewayConnection {
+export class LiveGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private readonly logger = new Logger(LiveGateway.name);
 
   @WebSocketServer()
   private server?: Server;
+
+  /**
+   * Quien tiene la app abierta en cada carrera en preparacion, por socket.
+   *
+   * ponytail: en memoria del proceso. Con varias instancias cada una cuenta solo
+   * sus sockets; el arreglo es un hash en Redis por maraton.
+   */
+  private readonly presentes = new Map<string, Map<string, SocketDeEspectador>>();
 
   constructor(
     private readonly tokens: TokenService,
@@ -202,6 +235,108 @@ export class LiveGateway implements OnGatewayConnection {
     return { ok: true, room };
   }
 
+  handleDisconnect(socket: SocketDeEspectador): void {
+    this.quitarPresencia(socket);
+  }
+
+  /**
+   * "Tengo la app abierta y estoy aqui", directo por el socket.
+   *
+   * Es el camino rapido de la sala de espera: Traccar sube por HTTP, resuelve el
+   * dispositivo con un minuto de cache y depende de que el servicio nativo
+   * arranque y emita. Esto llega en cuanto el corredor abre la app —con o sin
+   * coordenadas— y es lo que el organizador cuenta para decidir si larga.
+   *
+   * Los puntos **no se guardan**: son de antes de la carrera.
+   */
+  @SubscribeMessage('presence')
+  async presence(
+    @ConnectedSocket() socket: SocketDeEspectador,
+    @MessageBody() body: { marathonId?: string; lat?: unknown; lng?: unknown },
+  ): Promise<{ ok: boolean; error?: string }> {
+    const marathonId = typeof body?.marathonId === 'string' ? body.marathonId : '';
+    await socket.authenticated;
+    if (!socket.userId) return { ok: false, error: 'UNAUTHORIZED' };
+
+    if (socket.presence?.marathonId !== marathonId) {
+      this.quitarPresencia(socket);
+      const registro = await this.prisma.registration.findFirst({
+        where: {
+          marathonId,
+          userId: socket.userId,
+          status: RegistrationStatus.confirmed,
+          deletedAt: null,
+          marathon: { preparingAt: { not: null }, liveStartedAt: null, liveFinishedAt: null },
+        },
+        select: { bibNumber: true },
+      });
+      if (!registro) return { ok: false, error: 'NOT_PREPARING' };
+      // Pudo llegar otra presencia mientras se consultaba la base.
+      if (socket.presence) this.quitarPresencia(socket);
+      socket.presence = { marathonId, bib: registro.bibNumber, ultimo: null, ultimoEnvioMs: 0 };
+      let sala = this.presentes.get(marathonId);
+      if (!sala) this.presentes.set(marathonId, (sala = new Map<string, SocketDeEspectador>()));
+      sala.set(socket.id, socket);
+      this.emitirPresentes(marathonId);
+    }
+
+    const presencia = socket.presence;
+    const lat = coordenada(body?.lat, 90);
+    const lng = coordenada(body?.lng, 180);
+    const ahora = Date.now();
+    if (lat === null || lng === null || ahora - presencia.ultimoEnvioMs < PRESENCIA_MIN_MS) {
+      return { ok: true };
+    }
+
+    presencia.ultimoEnvioMs = ahora;
+    presencia.ultimo = {
+      bib: presencia.bib,
+      lat,
+      lng,
+      distanceMeters: 0,
+      lap: 1,
+      t: new Date(ahora).toISOString(),
+    };
+    this.server?.to(salaDeMaraton(marathonId)).emit('runner:position', presencia.ultimo);
+    return { ok: true };
+  }
+
+  @SubscribeMessage('presence:leave')
+  presenceLeave(@ConnectedSocket() socket: SocketDeEspectador): { ok: boolean } {
+    this.quitarPresencia(socket);
+    return { ok: true };
+  }
+
+  /** Cuantas personas distintas tienen la app abierta en esa carrera. */
+  contarPresentes(marathonId: string): number {
+    const sala = this.presentes.get(marathonId);
+    if (!sala) return 0;
+    return new Set([...sala.values()].map((s) => s.userId)).size;
+  }
+
+  /** Ultima posicion de cada presente, para la foto del mapa. */
+  posicionesDePresentes(marathonId: string): PosicionEnVivo[] {
+    const sala = this.presentes.get(marathonId);
+    if (!sala) return [];
+    return [...sala.values()].flatMap((s) => (s.presence?.ultimo ? [s.presence.ultimo] : []));
+  }
+
+  private quitarPresencia(socket: SocketDeEspectador): void {
+    const presencia = socket.presence;
+    if (!presencia) return;
+    socket.presence = undefined;
+    const sala = this.presentes.get(presencia.marathonId);
+    sala?.delete(socket.id);
+    if (sala?.size === 0) this.presentes.delete(presencia.marathonId);
+    this.emitirPresentes(presencia.marathonId);
+  }
+
+  private emitirPresentes(marathonId: string): void {
+    this.server
+      ?.to(salaDeMaraton(marathonId))
+      .emit('marathon:presence', { marathonId, count: this.contarPresentes(marathonId) });
+  }
+
   @SubscribeMessage('leave')
   async leave(
     @ConnectedSocket() socket: SocketDeEspectador,
@@ -270,6 +405,14 @@ export class LiveGateway implements OnGatewayConnection {
       ...inscritos.map(salaDeUsuario),
     ];
     this.server.to(salas).emit('marathon:state', estado);
+
+    // Fuera de preparacion ya no hay sala de espera: la largada la recoge la
+    // sesion de carrera, y una cancelacion deja a todos fuera.
+    if (estado.state !== 'preparing') {
+      for (const s of [...(this.presentes.get(marathonId)?.values() ?? [])]) {
+        this.quitarPresencia(s);
+      }
+    }
   }
 
   /**

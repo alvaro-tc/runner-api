@@ -20,6 +20,7 @@ import { PaymentsService } from '../payments/payments.service';
 import { RacesService } from '../races/races.service';
 import { RoutesService } from '../routes/routes.service';
 import { LiveService } from '../realtime/live.service';
+import { WorkoutSessionsService } from '../workouts/workout-sessions.service';
 import {
   MarathonRegistrationStatus,
   PaymentMethod,
@@ -197,6 +198,7 @@ export class AdminService {
     private readonly storage: StorageService,
     private readonly config: AppConfigService,
     private readonly permisos: PermisosService,
+    private readonly sesiones: WorkoutSessionsService,
   ) {}
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -563,6 +565,10 @@ export class AdminService {
     await this.live.anunciar(estado);
     this.logger.log(`Maraton ${actualizada.slug} ${arrancar ? 'largada' : 'finalizada'}`);
 
+    // En segundo plano: con cientos de corredores son cientos de cierres y el
+    // panel no tiene por que esperar. Cada uno recalcula puestos al terminar.
+    if (!arrancar) void this.cerrarSesionesAbiertas(marathonId);
+
     return { ...estado, slug: actualizada.slug, name: actualizada.name };
   }
 
@@ -625,6 +631,7 @@ export class AdminService {
     return {
       ...estadoParaElSocket(maraton),
       runners: this.live.posiciones(marathonId),
+      appOpen: this.live.presentes(marathonId),
     };
   }
 
@@ -884,6 +891,42 @@ export class AdminService {
       finishTimeSeconds: resultado.finishTimeSeconds,
       chipTimeSeconds: resultado.chipTimeSeconds,
     }));
+  }
+
+  /**
+   * Al cortar la carrera, cierra las sesiones que siguen abiertas.
+   *
+   * Es quien rescata a los corredores cuya llegada el GPS no detecto (Traccar
+   * con el trazado mal cortado, un telefono que dejo de subir puntos): sin esto
+   * no tendrian resultado ni puesto, y el organizador no podria ni corregirlos.
+   * Es el mismo cierre que el boton de finalizar. Quien no llego a la meta queda
+   * detras en la clasificacion: ver `ranking.ts`.
+   */
+  private async cerrarSesionesAbiertas(marathonId: string): Promise<void> {
+    const abiertas = await this.prisma.trackingSession.findMany({
+      where: { marathonId, status: { in: ['active', 'paused'] } },
+      select: { id: true, userId: true },
+    });
+
+    // ponytail: secuencial y cada cierre recalcula la maraton entera (O(n²));
+    // suficiente para cientos de corredores, agrupar el recalculo si son miles.
+    for (const s of abiertas) {
+      await this.sesiones.finalizar(s.userId, s.id, {}).catch((error: unknown) => {
+        this.logger.warn({ err: error, sessionId: s.id }, 'No se pudo cerrar la sesion al finalizar la carrera');
+      });
+    }
+
+    if (abiertas.length) this.logger.log(`Fin de ${marathonId}: ${abiertas.length} sesiones cerradas`);
+  }
+
+  clasificacion(marathonId: string) {
+    return this.buscarMaraton(marathonId).then(() => this.races.clasificacion(marathonId));
+  }
+
+  fijarClasificacion(marathonId: string, registrationIds: string[]) {
+    return this.buscarMaraton(marathonId).then(() =>
+      this.races.fijarClasificacion(marathonId, registrationIds),
+    );
   }
 
   /** Recalcula puestos sin tocar tiempos. Para después de corregir uno a mano. */

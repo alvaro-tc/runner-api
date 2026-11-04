@@ -1201,6 +1201,13 @@ model RaceResult {
   elevationGainMeters Int    @default(0)
   bestKmIndex         Int?
 
+  /// Validacion del recorrido contra el trazado oficial (ver `course.ts`).
+  /// Null = no se pudo validar: sin trazado cargado o resultado de cronometraje.
+  routeCompleted Boolean?
+  /// Fraccion 0..1 de tramos de 250 m del recorrido con puntos GPS.
+  routeCoverage  Float?
+  lapsCompleted  Int?
+
   overallRank  Int?
   manualOverallRank Int?
   categoryRank Int?

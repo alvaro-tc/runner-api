@@ -9,9 +9,12 @@
 
 import { haversine, type Punto } from '../workouts/metrics';
 import type { EstadoEnVivo } from '../marathons/live-status';
+import { pistaInicial, type Pista } from './course';
 
 /** Lo minimo que necesita un punto para entrar en la cuenta. */
-export type PuntoLive = Pick<Punto, 'recordedAt' | 'lat' | 'lng'>;
+export type PuntoLive = Pick<Punto, 'recordedAt' | 'lat' | 'lng'> & {
+  accuracyMeters?: number | null;
+};
 
 export interface EstadoCorredor {
   marathonId: string;
@@ -25,8 +28,8 @@ export interface EstadoCorredor {
   ultimoPunto: PuntoLive | null;
   /** Cuando se toco por ultima vez, para poder podar lo abandonado. */
   ultimoUsoMs: number;
-  /** Metros de **trazado oficial** cubiertos en la vuelta en curso. Ver `course.ts`. */
-  progresoM: number;
+  /** Donde va sobre el **trazado oficial**, todas las vueltas. Ver `course.ts`. */
+  pista: Pista;
   /** Vueltas al circuito ya cerradas. 0 en toda carrera de una sola vuelta. */
   vueltas: number;
   /** Ya se le dio por llegado. Se mira para no detectar la meta dos veces. */
@@ -41,7 +44,7 @@ export function nuevoEstado(marathonId: string, bib: string | null): EstadoCorre
     distanceMeters: 0,
     ultimoPunto: null,
     ultimoUsoMs: Date.now(),
-    progresoM: 0,
+    pista: pistaInicial(),
     vueltas: 0,
     terminado: false,
   };
