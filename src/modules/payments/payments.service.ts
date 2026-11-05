@@ -152,6 +152,15 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     const repetido = await this.reutilizar(userId, registrationId, idempotencyKey);
     if (repetido) return repetido;
 
+    // El efectivo solo lo registra un organizador desde el panel (`cobrarEnFisico`).
+    if (dto.method === PaymentMethod.cash) {
+      throw new AppException(
+        ErrorCode.PAYMENT_METHOD_NOT_SUPPORTED,
+        'El pago en físico lo registra un organizador',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
     const { registro, cotizacion } = await this.registrations.prepararParaPago(
       userId,
       registrationId,
@@ -825,6 +834,36 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
    * emiten en la misma transaccion de siempre. Aqui el `updateMany` condicionado
    * evita que dos admins impacientes pidan dos dorsales.
    */
+  /**
+   * Inscripcion en fisico: el organizador cobro en efectivo. Abre el cobro con
+   * el mismo precio que la app (`prepararParaPago`) y lo acredita por el mismo
+   * camino que una transferencia, asi el cupo y el dorsal salen igual.
+   */
+  async cobrarEnFisico(userId: string, registrationId: string, organizadorId: string) {
+    const { registro, cotizacion } = await this.registrations.prepararParaPago(userId, registrationId);
+
+    // Un QR que quedo abierto ya no se va a pagar: que no quede en la cola.
+    await this.prisma.payment.updateMany({
+      where: { registrationId: registro.id, status: PaymentStatus.pending },
+      data: { status: PaymentStatus.failed, failureReason: 'Pagado en físico' },
+    });
+
+    const pago = await this.prisma.payment.create({
+      data: {
+        registrationId: registro.id,
+        provider: PaymentProviderName.manual,
+        method: PaymentMethod.cash,
+        status: PaymentStatus.pending,
+        amountCents: cotizacion.totalCents,
+        currency: cotizacion.currency,
+        idempotencyKey: `cash-${registro.id}-${Date.now()}`,
+        methodDetails: { cash: { collectedBy: organizadorId } },
+      },
+    });
+
+    return this.acreditarManualmente(pago.id, organizadorId);
+  }
+
   async acreditarManualmente(paymentId: string, adminUserId: string, referencia?: string) {
     const pago = await this.prisma.payment.findUnique({ where: { id: paymentId } });
 
@@ -836,9 +875,14 @@ export class PaymentsService implements OnModuleInit, OnModuleDestroy {
     // cuadra contra el extracto, y el QR manual, que se cuadra contra el
     // comprobante que subio el corredor. Una tarjeta rechazada NO se arregla
     // declarandola pagada, y por eso la lista es cerrada.
-    const CONFIRMABLES: PaymentMethod[] = [PaymentMethod.bank_transfer, PaymentMethod.qr_manual];
+    const CONFIRMABLES: PaymentMethod[] = [
+      PaymentMethod.bank_transfer,
+      PaymentMethod.qr_manual,
+      PaymentMethod.cash,
+    ];
 
-    await this.exigirValidador(pago.id, adminUserId);
+    // El efectivo lo valida quien lo tuvo en la mano, no el validador de la carrera.
+    if (pago.method !== PaymentMethod.cash) await this.exigirValidador(pago.id, adminUserId);
 
     if (!CONFIRMABLES.includes(pago.method)) {
       throw new AppException(

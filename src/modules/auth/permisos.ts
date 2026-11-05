@@ -29,6 +29,8 @@ export const MODULOS = [
     permisos: [
       { key: 'inscritas.ver', name: 'Ver inscritas', description: 'Lista con nombre, CI, celular y dorsal.' },
       { key: 'inscritas.exportar', name: 'Exportar', description: 'Descargar el listado en CSV/Excel.' },
+      { key: 'inscritas.manual', name: 'Inscribir en físico', description: 'Inscribir a mano a quien pagó en efectivo; queda a nombre de quien cobró.' },
+      { key: 'inscritas.anular', name: 'Anular inscripción', description: 'Retirar el pago de una persona: deja de figurar como inscrita y libera su cupo.' },
     ],
   },
   {
@@ -37,7 +39,7 @@ export const MODULOS = [
     description: 'Pagos por QR y comprobantes.',
     permisos: [
       { key: 'cobros.ver', name: 'Ver cobros', description: 'Pagos, comprobantes y su exportación.' },
-      { key: 'cobros.validar', name: 'Validar', description: 'Aprobar o rechazar comprobantes, confirmar y reembolsar.' },
+      { key: 'cobros.validar', name: 'Validar', description: 'Aprobar o rechazar comprobantes y confirmar transferencias.' },
     ],
   },
   {

@@ -11,7 +11,7 @@ import { PaymentProofService } from '../payments/manual-qr/payment-proof.service
 import { RegistrationsService } from '../registrations/registrations.service';
 import { PaymentMethod, PaymentStatus } from '../../../generated/prisma/enums';
 import type { Payment } from '../../../generated/prisma/client';
-import type { PublicRegistrationDto } from './dto/public-registration.dto';
+import type { ManualRegistrationDto, PublicRegistrationDto } from './dto/public-registration.dto';
 
 /**
  * TEMPORAL — inscripcion desde la web publica. Ver `docs/pago-qr-manual.md`.
@@ -87,6 +87,50 @@ export class PublicRegistrationService {
       currency: pago.currency,
       qr,
       expiresAt: pago.expiresAt?.toISOString() ?? null,
+      account: { created: cuenta.created, username: ci, mustChangePassword: cuenta.debeCambiar },
+    };
+  }
+
+  /**
+   * Inscripcion en fisico desde el panel: misma cuenta por CI y mismo borrador
+   * que la web, pero el cobro nace en efectivo a nombre del organizador.
+   * No depende de `PUBLIC_REGISTRATION_ENABLED`: la hace una persona del equipo.
+   */
+  async inscribirEnFisico(marathonId: string, dto: ManualRegistrationDto, organizadorId: string) {
+    const ci = normalizarCi(dto.personalData.docId);
+
+    if (!esCiValida(ci)) {
+      throw new AppException(
+        ErrorCode.VALIDATION_ERROR,
+        'La CI no tiene un formato valido',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const cuenta = await this.resolverCuenta(ci, dto.personalData);
+    const borrador = await this.registrations.crear(cuenta.userId, {
+      marathonId,
+      personalData: dto.personalData,
+    });
+    await this.registrations.actualizarCategoriaYExtras(cuenta.userId, borrador.id, {
+      categoryId: dto.categoryId ?? null,
+      extras: dto.extras ?? [],
+    });
+
+    const pago = await this.payments.cobrarEnFisico(cuenta.userId, borrador.id, organizadorId);
+    const registro = await this.prisma.registration.findUniqueOrThrow({
+      where: { id: borrador.id },
+      select: { bibNumber: true, status: true },
+    });
+
+    this.logger.log(`Inscripcion en fisico ${borrador.id} (CI ${ci}) por ${organizadorId}`);
+
+    return {
+      registrationId: borrador.id,
+      registrationStatus: registro.status,
+      bibNumber: registro.bibNumber,
+      paymentId: pago.id,
+      totalCents: pago.amountCents,
       account: { created: cuenta.created, username: ci, mustChangePassword: cuenta.debeCambiar },
     };
   }

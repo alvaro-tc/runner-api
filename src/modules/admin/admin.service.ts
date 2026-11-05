@@ -146,6 +146,22 @@ function aUsuarioPublico(u: UsuarioSeleccionado) {
 }
 
 /** Lo que hace falta de un cobro para pintarlo como ticket. */
+/** Por donde entro el dinero: QR revisado a mano, la API del banco o efectivo. */
+export type CanalPago = 'qr' | 'api' | 'fisico';
+const FILTRO_CANAL: Record<CanalPago, Prisma.PaymentWhereInput> = {
+  qr: { method: { in: [PaymentMethod.qr_manual, PaymentMethod.qr] }, provider: { not: 'pasarela' } },
+  api: { provider: 'pasarela' },
+  fisico: { method: PaymentMethod.cash },
+};
+const canalDe = (p: { provider: string; method: PaymentMethod }): CanalPago | null =>
+  p.provider === 'pasarela'
+    ? 'api'
+    : p.method === PaymentMethod.cash
+      ? 'fisico'
+      : p.method === PaymentMethod.qr_manual || p.method === PaymentMethod.qr
+        ? 'qr'
+        : null;
+
 const INCLUDE_TICKET = {
   confirmedBy: { select: { id: true, name: true } },
   refundedBy: { select: { id: true, name: true } },
@@ -1021,7 +1037,18 @@ export class AdminService {
         include: {
           user: { select: { email: true, name: true } },
           marathon: { select: { slug: true, name: true } },
-          payments: { orderBy: { createdAt: 'desc' }, take: 1 },
+          payments: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            include: {
+              confirmedBy: { select: { name: true } },
+              proofs: {
+                orderBy: { createdAt: 'desc' },
+                take: 1,
+                include: { reviewedBy: { select: { name: true } } },
+              },
+            },
+          },
         },
       }),
     ]);
@@ -1039,9 +1066,7 @@ export class AdminService {
         bibNumber: r.bibNumber,
         status: r.status,
         totalCents: r.totalCents,
-        payment: r.payments[0]
-          ? { id: r.payments[0].id, method: r.payments[0].method, status: r.payments[0].status }
-          : null,
+        payment: r.payments[0] ? this.aPagoDeInscripcion(r.payments[0]) : null,
         createdAt: r.createdAt.toISOString(),
       })),
       meta: {
@@ -1050,6 +1075,29 @@ export class AdminService {
         limit: porPagina,
         totalPages: Math.ceil(total / porPagina),
       },
+    };
+  }
+
+  /** El cobro de una inscrita con quien lo valido y su comprobante: lo que abre "Validado por". */
+  private aPagoDeInscripcion(p: Prisma.PaymentGetPayload<{
+    include: {
+      confirmedBy: { select: { name: true } };
+      proofs: { include: { reviewedBy: { select: { name: true } } } };
+    };
+  }>) {
+    const comprobante = p.proofs[0];
+    const porApi = p.provider === 'pasarela';
+    return {
+      id: p.id,
+      method: p.method,
+      channel: canalDe(p),
+      status: p.status,
+      byApi: porApi,
+      paidAt: p.paidAt?.toISOString() ?? null,
+      validatedBy: porApi ? 'API de pagos' : (p.confirmedBy?.name ?? comprobante?.reviewedBy?.name ?? null),
+      validatedAt: (p.paidAt ?? comprobante?.reviewedAt)?.toISOString() ?? null,
+      proofImageUrl: comprobante ? this.storage.url(comprobante.imageKey) : null,
+      proofReference: comprobante?.reference ?? null,
     };
   }
 
@@ -1071,6 +1119,8 @@ export class AdminService {
     marathonId?: string;
     status?: PaymentStatus;
     q?: string;
+    channel?: CanalPago;
+    validatedById?: string;
     page?: number;
     pageSize?: number;
   }) {
@@ -1097,16 +1147,61 @@ export class AdminService {
     return new Paginated(filas, null, total, page, pageSize);
   }
 
+  /**
+   * Lo cobrado (solo `paid`) con los filtros de la cola, y cuanto cobro cada
+   * persona. `byValidator` ignora el filtro de validador: es la lista para elegirlo.
+   */
+  async resumenPagos(filtros: {
+    marathonId?: string;
+    q?: string;
+    channel?: CanalPago;
+    validatedById?: string;
+  }) {
+    const where = this.filtroPagos({ ...filtros, status: PaymentStatus.paid });
+    const [total, porPersona] = await Promise.all([
+      this.prisma.payment.aggregate({ where, _sum: { amountCents: true }, _count: true }),
+      this.prisma.payment.groupBy({
+        by: ['confirmedById'],
+        where: this.filtroPagos({ ...filtros, validatedById: undefined, status: PaymentStatus.paid }),
+        _sum: { amountCents: true },
+        _count: true,
+      }),
+    ]);
+    const ids = porPersona.map((g) => g.confirmedById).filter((id): id is string => !!id);
+    const nombres = new Map(
+      (await this.prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })).map(
+        (u) => [u.id, u.name],
+      ),
+    );
+    return {
+      paidCents: total._sum.amountCents ?? 0,
+      paidCount: total._count,
+      byValidator: porPersona
+        .filter((g) => g.confirmedById)
+        .map((g) => ({
+          id: g.confirmedById!,
+          name: nombres.get(g.confirmedById!) ?? '—',
+          paidCents: g._sum.amountCents ?? 0,
+          paidCount: g._count,
+        }))
+        .sort((a, b) => b.paidCents - a.paidCents),
+    };
+  }
+
   /** Mismo filtro de [listarPagos], separado para que [pagosCsv] no lo repita. */
   private filtroPagos(filtros: {
     marathonId?: string;
     status?: PaymentStatus;
     q?: string;
+    channel?: CanalPago;
+    validatedById?: string;
   }): Prisma.PaymentWhereInput {
     const q = filtros.q?.trim();
 
     return {
       ...(filtros.status ? { status: filtros.status } : {}),
+      ...(filtros.channel ? FILTRO_CANAL[filtros.channel] : {}),
+      ...(filtros.validatedById ? { confirmedById: filtros.validatedById } : {}),
       registration: {
         deletedAt: null,
         ...(filtros.marathonId ? { marathonId: filtros.marathonId } : {}),
@@ -1139,6 +1234,8 @@ export class AdminService {
     marathonId?: string;
     status?: PaymentStatus;
     q?: string;
+    channel?: CanalPago;
+    validatedById?: string;
   }): Promise<{ filename: string; csv: string }> {
     const pagos = await this.prisma.payment.findMany({
       where: this.filtroPagos(filtros),
@@ -1157,6 +1254,7 @@ export class AdminService {
       { header: 'Carrera', valor: (f) => f.marathon },
       { header: 'Monto (Bs)', valor: (f) => (f.amountCents / 100).toFixed(2) },
       { header: 'Metodo', valor: (f) => f.method },
+      { header: 'Canal', valor: (f) => f.channel },
       { header: 'Estado', valor: (f) => f.status },
       { header: 'Referencia comprobante', valor: (f) => f.proofReference },
       { header: 'Validado por', valor: (f) => f.validatedBy },
@@ -1164,7 +1262,7 @@ export class AdminService {
       { header: 'Creado el', valor: (f) => f.createdAt },
     ]);
 
-    return { filename: 'cobros.csv', csv };
+    return { filename: `cobros${filtros.channel ? '-' + filtros.channel : ''}.csv`, csv };
   }
 
   /**
@@ -1195,6 +1293,7 @@ export class AdminService {
     return {
       id: p.id,
       method: p.method,
+      channel: canalDe(p),
       status: p.status,
       byApi: porApi,
       validatorId: validador?.id ?? null,

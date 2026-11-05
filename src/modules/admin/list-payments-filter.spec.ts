@@ -22,6 +22,15 @@ describe('listado de cobros del panel', () => {
     expect(where()).toEqual({ registration: { deletedAt: null, marathonId: 'm1' } });
   });
 
+  it('filtra por canal y por quien cobro', async () => {
+    await admin.listarPagos({ channel: 'fisico', validatedById: 'u9' });
+    expect(where()).toMatchObject({ method: 'cash', confirmedById: 'u9' });
+    await admin.listarPagos({ channel: 'api' });
+    expect(where()).toMatchObject({ provider: 'pasarela' });
+    await admin.listarPagos({ channel: 'qr' });
+    expect(where()).toMatchObject({ provider: { not: 'pasarela' } });
+  });
+
   it('busca en la inscripcion, el dorsal y el numero de transaccion', async () => {
     await admin.listarPagos({ q: ' 4521 ' });
     const ramas = where().OR as Record<string, unknown>[];

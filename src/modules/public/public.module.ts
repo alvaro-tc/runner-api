@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { PaymentsModule } from '../payments/payments.module';
 import { RegistrationsModule } from '../registrations/registrations.module';
+import { ManualRegistrationController } from './manual-registration.controller';
 import { PublicRegistrationController } from './public-registration.controller';
 import { PublicRegistrationService } from './public-registration.service';
 
@@ -16,7 +17,7 @@ import { PublicRegistrationService } from './public-registration.service';
  */
 @Module({
   imports: [RegistrationsModule, PaymentsModule],
-  controllers: [PublicRegistrationController],
+  controllers: [PublicRegistrationController, ManualRegistrationController],
   providers: [PublicRegistrationService],
 })
 export class PublicModule {}

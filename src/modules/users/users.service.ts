@@ -179,6 +179,7 @@ export class UsersService {
       'units',
       'theme',
       'locale',
+      'marathonId',
     ]);
 
     if (dto.notifications) {
@@ -480,6 +481,7 @@ export class UsersService {
     notifications: unknown;
     privacy: unknown;
     onboardingSeenAt: Date | null;
+    marathonId: string | null;
   }) {
     return {
       units: prefs.units,
@@ -488,6 +490,7 @@ export class UsersService {
       notifications: asObjeto(prefs.notifications),
       privacy: asObjeto(prefs.privacy),
       onboardingSeenAt: prefs.onboardingSeenAt?.toISOString() ?? null,
+      marathonId: prefs.marathonId,
     };
   }
 

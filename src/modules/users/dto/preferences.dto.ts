@@ -44,6 +44,11 @@ export class UpdatePreferencesDto {
   @IsOptional()
   @IsBoolean()
   onboardingSeen?: boolean;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Carrera elegida en el panel web; null la olvida' })
+  @IsOptional()
+  @IsString()
+  marathonId?: string | null;
 }
 
 export class PreferencesDto {
@@ -64,4 +69,7 @@ export class PreferencesDto {
 
   @ApiProperty({ nullable: true })
   onboardingSeenAt!: string | null;
+
+  @ApiProperty({ nullable: true })
+  marathonId!: string | null;
 }

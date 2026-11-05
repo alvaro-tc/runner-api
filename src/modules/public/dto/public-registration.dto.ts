@@ -58,6 +58,28 @@ export class PublicRegistrationDto {
   termsAccepted!: boolean;
 }
 
+/** Inscripcion en fisico desde el panel: lo mismo, sin terminos (los firma en persona). */
+export class ManualRegistrationDto {
+  @ApiProperty({ type: PersonalDataDto })
+  @ValidateNested()
+  @Type(() => PersonalDataDto)
+  personalData!: PersonalDataDto;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  categoryId?: string | null;
+
+  @ApiPropertyOptional({ type: [QuoteExtraDto] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => QuoteExtraDto)
+  extras?: QuoteExtraDto[];
+}
+
 // --- Salida ------------------------------------------------------------------
 
 /** Que paso con la cuenta del corredor. Es lo que la web tiene que contarle. */

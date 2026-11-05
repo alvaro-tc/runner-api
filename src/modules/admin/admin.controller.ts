@@ -42,7 +42,7 @@ import {
   RouteSummaryDto,
   UpdateRouteDto,
 } from '../routes/dto/route.dto';
-import { AdminService } from './admin.service';
+import { AdminService, type CanalPago } from './admin.service';
 import {
   ConfirmTransferDto,
   CreateCategoryDto,
@@ -700,22 +700,47 @@ export class AdminController {
       '—**el nombre de quien lo dio por pagado**— y, si el cobro fue por QR, el `proofId` que ' +
       'hay que aprobar o rechazar; sin él, lo que aplica es confirmar la transferencia.',
   })
+  @ApiQuery({ name: 'channel', required: false, enum: ['qr', 'api', 'fisico'] })
+  @ApiQuery({ name: 'validatedById', required: false, description: 'Quien lo cobro o valido' })
   listarPagos(
     @Query('marathonId') marathonId?: string,
     @Query('status') status?: PaymentStatus,
     @Query('q') q?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
+    @Query('channel') channel?: string,
+    @Query('validatedById') validatedById?: string,
   ) {
     return this.admin.listarPagos({
       marathonId,
       status,
       q,
+      channel: canal(channel),
+      validatedById: validatedById || undefined,
       page: Number(page) || 1,
       // Techo duro: el tamaño de página lo escribe el cliente y sin límite una
       // sola llamada se lleva la tabla de dinero entera.
       pageSize: Math.min(Number(pageSize) || 20, 100),
     });
+  }
+
+  @Get('payments/summary')
+  @Permiso('cobros.ver')
+  @ApiQuery({ name: 'marathonId', required: false })
+  @ApiQuery({ name: 'q', required: false })
+  @ApiQuery({ name: 'channel', required: false, enum: ['qr', 'api', 'fisico'] })
+  @ApiQuery({ name: 'validatedById', required: false })
+  @ApiOperation({
+    summary: 'Total cobrado con los filtros de la cola',
+    description: 'Solo cobros `paid`. `byValidator` desglosa cuanto cobro cada persona del equipo.',
+  })
+  resumenPagos(
+    @Query('marathonId') marathonId?: string,
+    @Query('q') q?: string,
+    @Query('channel') channel?: string,
+    @Query('validatedById') validatedById?: string,
+  ) {
+    return this.admin.resumenPagos({ marathonId, q, channel: canal(channel), validatedById: validatedById || undefined });
   }
 
   @Get('payments/pending-transfers')
@@ -746,14 +771,24 @@ export class AdminController {
     summary: 'Exportar los cobros a CSV',
     description: 'La misma lista y los mismos filtros de `GET /admin/payments`, sin paginar.',
   })
+  @ApiQuery({ name: 'channel', required: false, enum: ['qr', 'api', 'fisico'] })
+  @ApiQuery({ name: 'validatedById', required: false })
   @ApiResponse({ status: 200, description: 'Archivo CSV' })
   async exportarPagos(
     @Res() res: Response,
     @Query('marathonId') marathonId?: string,
     @Query('status') status?: PaymentStatus,
     @Query('q') q?: string,
+    @Query('channel') channel?: string,
+    @Query('validatedById') validatedById?: string,
   ) {
-    const { filename, csv } = await this.admin.pagosCsv({ marathonId, status, q });
+    const { filename, csv } = await this.admin.pagosCsv({
+      marathonId,
+      status,
+      q,
+      channel: canal(channel),
+      validatedById: validatedById || undefined,
+    });
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.send(csv);
   }
@@ -791,7 +826,7 @@ export class AdminController {
   }
 
   @Post('payments/:id/refund')
-  @Permiso('cobros.validar')
+  @Permiso('inscritas.anular')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Devolver un cobro y anular la inscripción',
@@ -1028,4 +1063,9 @@ export class AdminController {
   ) {
     return this.admin.borrarUsuario(id, adminId, actorRole);
   }
+}
+
+/** Un canal desconocido se ignora en vez de filtrar a cero. */
+function canal(valor?: string): CanalPago | undefined {
+  return valor === 'qr' || valor === 'api' || valor === 'fisico' ? valor : undefined;
 }

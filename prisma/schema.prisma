@@ -131,6 +131,9 @@ enum PaymentMethod {
   /// No pasa por ningun proveedor: el corredor sube un comprobante y un
   /// organizador lo aprueba. Se borra el dia que entre una pasarela real.
   qr_manual
+  /// Efectivo cobrado en persona por un organizador, que inscribe a mano desde
+  /// el panel. `confirmedById` es quien recibio el dinero.
+  cash
 }
 
 enum PaymentStatus {
@@ -328,6 +331,10 @@ model UserPreferences {
   /// Se persiste en el backend a proposito: sobrevive a una reinstalacion,
   /// asi el usuario no vuelve a ver el onboarding en un telefono nuevo.
   onboardingSeenAt DateTime?
+
+  /// Ultima carrera elegida en el panel web: al volver a entrar se abre esa.
+  /// Sin FK: si la carrera se borra, el panel cae en la primera de la lista.
+  marathonId String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
